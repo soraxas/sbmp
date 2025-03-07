@@ -1,3 +1,4 @@
+#[derive(Debug, Clone)]
 pub struct RealVectorBounds {
     pub(crate) low: Vec<f64>,
     pub(crate) high: Vec<f64>,

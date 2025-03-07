@@ -13,3 +13,6 @@ rand = "0.8.0"
 statrs = "0.18.0"
 thiserror = "2.0.12"
 tracing = "0.1.41"
+
+[dependencies.sbmp_derive]
+path = "sbmp_derive"

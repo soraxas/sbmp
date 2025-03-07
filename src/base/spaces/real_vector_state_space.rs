@@ -1,15 +1,24 @@
 use itertools::izip;
+use nalgebra::DVector;
 use rand::Rng;
+use sbmp_derive::WithStateSpaceData;
 use std::cmp;
 use std::collections::HashMap;
 use std::f64::consts::E;
 use std::f64::EPSILON;
 
+use crate::base::state::State;
+use crate::base::statespace::{HasStateSpaceData, StateSpace, StateSpaceCommonData};
+use crate::downcast_state;
 use crate::randomness::RNG;
 
 use super::real_vector_bounds::RealVectorBounds;
 
+// write a derive macro that automatically add a member struct of type HashMap<String, usize> with name HAHA to the struct
+
+#[derive(Debug, WithStateSpaceData)]
 pub struct RealVectorStateSpace {
+    state_space_data: StateSpaceCommonData,
     state_bytes: usize,
     pub(crate) dimension: usize,
     pub(crate) bounds: RealVectorBounds,
@@ -23,9 +32,17 @@ impl Default for RealVectorStateSpace {
     }
 }
 
+#[derive(Debug)]
+pub struct RealVectorState {
+    pub values: DVector<f64>,
+}
+
+impl State for RealVectorState {}
+
 impl RealVectorStateSpace {
     pub fn new() -> Self {
         Self {
+            state_space_data: StateSpaceCommonData::default(),
             dimension: 0,
             state_bytes: 0,
             bounds: RealVectorBounds {
@@ -67,8 +84,18 @@ impl RealVectorStateSpace {
         self.dimension_names[index] = name.clone();
         self.dimension_index.insert(name, index);
     }
+}
 
-    pub fn get_maximum_extent(&self) -> f64 {
+// support ref or mut
+macro_rules! cast_to_rv_state {
+    // Catch-all pattern for all input, calls downcast_state! with 'from' and 'RealVectorState'
+    ($($input:tt)*) => {
+        downcast_state!($($input)*, RealVectorState)
+    };
+}
+
+impl StateSpace for RealVectorStateSpace {
+    fn get_maximum_extent(&self) -> f64 {
         self.bounds
             .low
             .iter()
@@ -78,7 +105,7 @@ impl RealVectorStateSpace {
             .sqrt()
     }
 
-    pub fn get_measure(&self) -> f64 {
+    fn get_measure(&self) -> f64 {
         self.bounds
             .low
             .iter()
@@ -87,13 +114,16 @@ impl RealVectorStateSpace {
             .product()
     }
 
-    pub fn enforce_bounds(&self, state: &mut [f64]) {
+    fn enforce_bounds(&self, state: &mut dyn State) {
+        let state = &mut cast_to_rv_state!(mut state).values;
         for (s, low, high) in izip!(state, &self.bounds.low, &self.bounds.high) {
             *s = s.clamp(*low, *high);
         }
     }
 
-    pub fn satisfies_bounds(&self, state: &[f64]) -> bool {
+    fn satisfies_bounds(&self, state: &dyn State) -> bool {
+        let state = &cast_to_rv_state!(state).values;
+
         state
             .iter()
             .zip(&self.bounds.low)
@@ -101,26 +131,32 @@ impl RealVectorStateSpace {
             .all(|((s, low), high)| s - f64::EPSILON > *low && s + f64::EPSILON < *high)
     }
 
-    pub fn distance(&self, state1: &[f64], state2: &[f64]) -> f64 {
-        state1
-            .iter()
-            .zip(state2)
-            .map(|(s1, s2)| (s1 - s2).powi(2))
-            .sum::<f64>()
-            .sqrt()
+    fn distance(&self, state1: &dyn State, state2: &dyn State) -> f64 {
+        let state1 = &cast_to_rv_state!(state1).values;
+        let state2 = &cast_to_rv_state!(state2).values;
+        (state1 - state2).norm()
     }
 
-    pub fn equal_states(&self, state1: &[f64], state2: &[f64]) -> bool {
-        state1
+    fn equal_states(&self, state1: &dyn State, state2: &dyn State) -> bool {
+        let state1 = &cast_to_rv_state!(state1).values;
+        let state2 = &cast_to_rv_state!(state2).values;
+
+        (state1 - state2)
+            .abs()
             .iter()
-            .zip(state2)
-            .all(|(s1, s2)| (s1 - s2).abs() <= f64::EPSILON * 2.0)
+            .all(|x| *x <= f64::EPSILON * 2.0)
     }
 
-    pub fn interpolate(&self, from: &[f64], to: &[f64], time: f64, state: &mut [f64]) {
-        for (s, f, t) in izip!(state, from, to) {
-            *s = f + (t - f) * time;
-        }
+    fn interpolate(&self, from: &dyn State, to: &dyn State, time: f64, state: &mut dyn State) {
+        let from = &cast_to_rv_state!(from).values;
+        let to = &cast_to_rv_state!(to).values;
+        let state = &mut cast_to_rv_state!(mut state).values;
+
+        *state = from + (to - from) * time;
+    }
+
+    fn setup(&mut self) {
+        todo!()
     }
 }
 
@@ -137,13 +173,17 @@ impl<'a> RealVectorStateSampler<'a> {
         }
     }
 
-    pub fn sample_uniform(&mut self, state: &mut [f64]) {
+    pub fn sample_uniform(&mut self, state: &mut dyn State) {
+        let state = &mut cast_to_rv_state!(mut state).values;
         for (state, low, high) in izip!(state, &self.space.bounds.low, &self.space.bounds.high) {
             *state = self.rng.uniform_real(*low, *high);
         }
     }
 
-    pub fn sample_uniform_near(&mut self, state: &mut [f64], near: &[f64], distance: f64) {
+    pub fn sample_uniform_near(&mut self, state: &mut dyn State, near: &dyn State, distance: f64) {
+        let state = &mut cast_to_rv_state!(mut state).values;
+        let near = &cast_to_rv_state!(near).values;
+
         for (state, near, low, high) in
             izip!(state, near, &self.space.bounds.low, &self.space.bounds.high)
         {
@@ -154,7 +194,10 @@ impl<'a> RealVectorStateSampler<'a> {
         }
     }
 
-    pub fn sample_gaussian(&mut self, state: &mut [f64], mean: &[f64], std_dev: f64) {
+    pub fn sample_gaussian(&mut self, state: &mut dyn State, mean: &dyn State, std_dev: f64) {
+        let state = &mut cast_to_rv_state!(mut state).values;
+        let mean = &cast_to_rv_state!(mean).values;
+
         for (state, mean, low, high) in
             izip!(state, mean, &self.space.bounds.low, &self.space.bounds.high)
         {

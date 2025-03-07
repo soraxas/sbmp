@@ -9,16 +9,15 @@ use std::sync::{Arc, Mutex, Once};
 use anyhow::{anyhow, Result};
 
 use downcast_rs::{impl_downcast, DowncastSync};
+use sbmp_derive::WithStateSpaceData;
 
 use super::param::ParamSet;
+use super::state::State;
 use super::state_sampler::{CompoundStateSampler, StateSampler};
 
 pub const DEFAULT_PROJECTION_NAME: &str = "";
 
 pub enum StateSpaceType {}
-
-pub trait State: DowncastSync {}
-impl_downcast!(sync State);
 
 pub struct CompoundState {
     pub components: Vec<Box<dyn State>>,
@@ -81,32 +80,25 @@ fn visit_all_space(state_space: &dyn StateSpace, f: &mut impl FnMut(&dyn StateSp
     }
 }
 
-pub trait StateSpace: DowncastSync + Debug {
+pub trait HasStateSpaceData {
     fn state_space_data(&self) -> &StateSpaceCommonData;
     fn state_space_data_mut(&mut self) -> &mut StateSpaceCommonData;
-    fn is_compound(&self) -> bool;
-    fn is_discrete(&self) -> bool;
+}
+
+pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
+    fn is_compound(&self) -> bool {
+        false
+    }
+
+    fn is_discrete(&self) -> bool {
+        false
+    }
 
     fn as_compound_ref(&self) -> Option<&CompoundStateSpace> {
         self.as_any().downcast_ref::<CompoundStateSpace>()
     }
 
     fn is_hybrid(&self) -> bool {
-        if let Some(space) = self.as_compound_ref() {
-            let mut has_continuous = false;
-            let mut has_discrete = false;
-            for component in &space.components {
-                if component.is_hybrid() {
-                    return true;
-                }
-                if component.is_discrete() {
-                    has_discrete = true;
-                } else {
-                    has_continuous = true;
-                }
-            }
-            return has_continuous && has_discrete;
-        }
         false
     }
 
@@ -212,7 +204,13 @@ pub trait StateSpace: DowncastSync + Debug {
         // Implement logic to return the longest valid segment length
         self.state_space_data().longest_valid_segment
     }
-    fn compute_signature(&self, signature: &mut Vec<i32>);
+    fn compute_signature(&self, signature: &mut Vec<i32>) {
+        if let Some(compound) = self.as_compound_ref() {
+            for component in &compound.components {
+                component.compute_signature(signature);
+            }
+        }
+    }
     fn get_dimension(&self) -> u32;
     fn get_maximum_extent(&self) -> f64;
     fn get_measure(&self) -> f64;
@@ -221,9 +219,9 @@ pub trait StateSpace: DowncastSync + Debug {
     fn copy_state(&self, destination: &mut dyn State, source: &dyn State);
     fn clone_state(&self, source: &dyn State) -> Box<dyn State>;
     fn distance(&self, state1: &dyn State, state2: &dyn State) -> f64;
-    fn get_serialization_length(&self) -> u32;
-    fn serialize(&self, serialization: &mut [u8], state: &dyn State);
-    fn deserialize(&self, state: &mut dyn State, serialization: &[u8]);
+    // fn get_serialization_length(&self) -> u32;
+    // fn serialize(&self, serialization: &mut [u8], state: &dyn State);
+    // fn deserialize(&self, state: &mut dyn State, serialization: &[u8]);
     fn equal_states(&self, state1: &dyn State, state2: &dyn State) -> bool;
     fn interpolate(&self, from: &dyn State, to: &dyn State, t: f64, state: &mut dyn State);
     // fn alloc_state_sampler(&self) -> Arc<dyn StateSampler>;
@@ -517,7 +515,17 @@ impl StateSpaceCommonData {
     }
 }
 
-#[derive(Debug)]
+impl Default for StateSpaceCommonData {
+    fn default() -> Self {
+        // default name to Space + number
+        Self::new(format!(
+            "Space{}",
+            ALLOCATED_SPACES.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+}
+
+#[derive(Debug, WithStateSpaceData)]
 pub struct CompoundStateSpace {
     state_space_data: StateSpaceCommonData,
     components: Vec<Arc<dyn StateSpace>>,
@@ -531,10 +539,10 @@ lazy_static::lazy_static! {
     static ref ALLOCATED_SPACES: AtomicU16 = 0.into();
 }
 
-impl CompoundStateSpace {
-    pub fn new(name: String) -> Self {
+impl Default for CompoundStateSpace {
+    fn default() -> Self {
         Self {
-            state_space_data: StateSpaceCommonData::new(name),
+            state_space_data: StateSpaceCommonData::default(),
             components: Vec::new(),
             weights: Vec::new(),
             weight_sum: 0.0,
@@ -542,7 +550,9 @@ impl CompoundStateSpace {
             // ...initialize other fields...
         }
     }
+}
 
+impl CompoundStateSpace {
     pub fn from_components(
         mut components: Vec<Arc<dyn StateSpace>>,
         mut weights: Vec<f64>,
@@ -553,10 +563,7 @@ impl CompoundStateSpace {
             ));
         }
 
-        let mut space = Self::new(format!(
-            "Space{}",
-            ALLOCATED_SPACES.fetch_add(1, Ordering::Relaxed)
-        ));
+        let mut space = Self::default();
         for (component, weight) in components.drain(..).zip(weights.drain(..)) {
             space.add_subspace(component, weight)?;
         }
@@ -612,12 +619,20 @@ impl CompoundStateSpace {
 }
 
 impl StateSpace for CompoundStateSpace {
-    fn state_space_data(&self) -> &StateSpaceCommonData {
-        &self.state_space_data
-    }
-
-    fn state_space_data_mut(&mut self) -> &mut StateSpaceCommonData {
-        &mut self.state_space_data
+    fn is_hybrid(&self) -> bool {
+        let mut has_continuous = false;
+        let mut has_discrete = false;
+        for component in &self.components {
+            if component.is_hybrid() {
+                return true;
+            }
+            if component.is_discrete() {
+                has_discrete = true;
+            } else {
+                has_continuous = true;
+            }
+        }
+        has_continuous && has_discrete
     }
 
     fn is_compound(&self) -> bool {
@@ -706,35 +721,35 @@ impl StateSpace for CompoundStateSpace {
             .sum()
     }
 
-    fn get_serialization_length(&self) -> u32 {
-        self.components
-            .iter()
-            .map(|c| c.get_serialization_length())
-            .sum()
-    }
+    // fn get_serialization_length(&self) -> u32 {
+    //     self.components
+    //         .iter()
+    //         .map(|c| c.get_serialization_length())
+    //         .sum()
+    // }
 
-    fn serialize(&self, serialization: &mut [u8], state: &dyn State) {
-        let cstate = state.downcast_ref::<CompoundState>().unwrap();
-        let mut offset = 0;
-        for (component, substate) in self.components.iter().zip(&cstate.components) {
-            let length = component.get_serialization_length() as usize;
-            component.serialize(
-                &mut serialization[offset..offset + length],
-                substate.as_ref(),
-            );
-            offset += length;
-        }
-    }
+    // fn serialize(&self, serialization: &mut [u8], state: &dyn State) {
+    //     let cstate = state.downcast_ref::<CompoundState>().unwrap();
+    //     let mut offset = 0;
+    //     for (component, substate) in self.components.iter().zip(&cstate.components) {
+    //         let length = component.get_serialization_length() as usize;
+    //         component.serialize(
+    //             &mut serialization[offset..offset + length],
+    //             substate.as_ref(),
+    //         );
+    //         offset += length;
+    //     }
+    // }
 
-    fn deserialize(&self, state: &mut dyn State, serialization: &[u8]) {
-        let cstate = state.downcast_mut::<CompoundState>().unwrap();
-        let mut offset = 0;
-        for (component, substate) in self.components.iter().zip(&mut cstate.components) {
-            let length = component.get_serialization_length() as usize;
-            component.deserialize(substate.as_mut(), &serialization[offset..offset + length]);
-            offset += length;
-        }
-    }
+    // fn deserialize(&self, state: &mut dyn State, serialization: &[u8]) {
+    //     let cstate = state.downcast_mut::<CompoundState>().unwrap();
+    //     let mut offset = 0;
+    //     for (component, substate) in self.components.iter().zip(&mut cstate.components) {
+    //         let length = component.get_serialization_length() as usize;
+    //         component.deserialize(substate.as_mut(), &serialization[offset..offset + length]);
+    //         offset += length;
+    //     }
+    // }
 
     fn equal_states(&self, state1: &dyn State, state2: &dyn State) -> bool {
         let cstate1 = state1.downcast_ref::<CompoundState>().unwrap();
