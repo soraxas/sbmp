@@ -14,6 +14,12 @@ pub struct CompoundState {
     pub components: Vec<StateId>,
 }
 
+impl Default for CompoundState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CompoundState {
     pub fn new() -> Self {
         Self {

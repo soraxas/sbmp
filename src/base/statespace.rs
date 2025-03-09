@@ -1,12 +1,12 @@
 use core::fmt;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 
-use downcast_rs::{impl_downcast, Downcast, DowncastSync};
+use downcast_rs::{impl_downcast, Downcast};
 use sbmp_derive::{state_id_into_inner, WithStateAlloc, WithStateSpaceData};
 
 use crate::prelude::CanStateAllocateTrait;

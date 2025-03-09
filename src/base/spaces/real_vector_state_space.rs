@@ -1,16 +1,13 @@
 use itertools::izip;
 use nalgebra::DVector;
 use sbmp_derive::{state_id_into_inner, WithStateAlloc, WithStateSpaceData};
-use statrs::assert_almost_eq;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::base::state::{self, State};
+use crate::base::state::State;
 use crate::base::state_allocator::{StateAllocator, StateId};
 use crate::base::state_sampler::StateSampler;
 use crate::base::statespace::{HasStateSpaceData, StateSpace, StateSpaceCommonData};
-use crate::datastructure::arena::Arena;
 use crate::prelude::CanStateAllocateTrait;
 use crate::randomness::RNG;
 
@@ -222,102 +219,108 @@ impl StateSampler for RealVectorStateSampler {
     }
 }
 
-#[test]
-fn test_rv_distance() {
-    let mut space = RealVectorStateSpace::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use statrs::assert_almost_eq;
 
-    space.add_dimension(None, 0.0, 1.0);
-    space.add_dimension(None, 1.0, 1.9);
+    #[test]
+    fn test_rv_distance() {
+        let mut space = RealVectorStateSpace::new();
 
-    let state1 = space.alloc_arena_state_with_value(RealVectorState {
-        values: DVector::from_vec(vec![0.5, 1.5]),
-    });
-    let state2 = space.alloc_arena_state_with_value(RealVectorState {
-        values: DVector::from_vec(vec![1.0, 1.5]),
-    });
-    assert_almost_eq!(space.distance(&state1, &state2), 0.5, f64::EPSILON);
+        space.add_dimension(None, 0.0, 1.0);
+        space.add_dimension(None, 1.0, 1.9);
 
-    space.with_state_mut(&state2, |state| {
-        state.values[1] = 1.;
-    });
-    assert_almost_eq!(
-        space.distance(&state1, &state2),
-        (2.0f64 * 0.5 * 0.5).sqrt(),
-        f64::EPSILON
-    );
-}
-
-#[test]
-fn test_rv_sample() {
-    let mut space = RealVectorStateSpace::new();
-
-    space.add_dimension(None, 0.0, 1.0);
-    space.add_dimension(None, 1.0, 1.9);
-
-    let space = Arc::new(space);
-    let mut state1 = space.alloc_state();
-
-    let mut sampler = RealVectorStateSampler::from_state_space(space.clone());
-
-    for _ in 0..100 {
-        sampler.sample_uniform(&mut state1);
-        // dbg!(space.clone_state_inner_value(&state1)
-        space.with_state(&state1, |state| {
-            assert!(0. < state.values[0] && state.values[0] < 1.);
-            assert!(1. < state.values[1] && state.values[1] < 1.9);
+        let state1 = space.alloc_arena_state_with_value(RealVectorState {
+            values: DVector::from_vec(vec![0.5, 1.5]),
         });
+        let state2 = space.alloc_arena_state_with_value(RealVectorState {
+            values: DVector::from_vec(vec![1.0, 1.5]),
+        });
+        assert_almost_eq!(space.distance(&state1, &state2), 0.5, f64::EPSILON);
+
+        space.with_state_mut(&state2, |state| {
+            state.values[1] = 1.;
+        });
+        assert_almost_eq!(
+            space.distance(&state1, &state2),
+            (2.0f64 * 0.5 * 0.5).sqrt(),
+            f64::EPSILON
+        );
     }
 
-    let state1 = space.alloc_arena_state_with_value(RealVectorState {
-        values: DVector::from_vec(vec![0.5, 1.5]),
-    });
-    let state2 = space.alloc_arena_state_with_value(RealVectorState {
-        values: DVector::from_vec(vec![1.0, 1.5]),
-    });
-    assert_almost_eq!(space.distance(&state1, &state2), 0.5, f64::EPSILON);
+    #[test]
+    fn test_rv_sample() {
+        let mut space = RealVectorStateSpace::new();
 
-    space.with_state_mut(&state2, |state| {
-        state.values[1] = 1.;
-    });
-    assert_almost_eq!(
-        space.distance(&state1, &state2),
-        (2.0f64 * 0.5 * 0.5).sqrt(),
-        f64::EPSILON
-    );
-}
+        space.add_dimension(None, 0.0, 1.0);
+        space.add_dimension(None, 1.0, 1.9);
 
-#[test]
-fn test_rv_interpolate() {
-    let mut space = RealVectorStateSpace::new();
+        let space = Arc::new(space);
+        let mut state1 = space.alloc_state();
 
-    space.add_dimension(None, 0.0, 1.0);
-    space.add_dimension(None, 1.0, 1.9);
-    space.add_dimension(None, 100.0, 100.9);
+        let mut sampler = RealVectorStateSampler::from_state_space(space.clone());
 
-    let state1 = space.alloc_arena_state_with_value(RealVectorState {
-        values: DVector::from_vec(vec![0.5, 1.5, 8.0]),
-    });
-    let state1_same = space.alloc_arena_state_with_value(RealVectorState {
-        values: DVector::from_vec(vec![0.5, 1.5, 8.0]),
-    });
-    let state2 = space.alloc_arena_state_with_value(RealVectorState {
-        values: DVector::from_vec(vec![1.0, 1.5, 100.0]),
-    });
+        for _ in 0..100 {
+            sampler.sample_uniform(&mut state1);
+            // dbg!(space.clone_state_inner_value(&state1)
+            space.with_state(&state1, |state| {
+                assert!(0. < state.values[0] && state.values[0] < 1.);
+                assert!(1. < state.values[1] && state.values[1] < 1.9);
+            });
+        }
 
-    assert!(state1 == state1);
-    assert!(state1 != state2);
-    assert!(space.equal_states(&state1, &state1_same));
-    assert!(!space.equal_states(&state1, &state2));
+        let state1 = space.alloc_arena_state_with_value(RealVectorState {
+            values: DVector::from_vec(vec![0.5, 1.5]),
+        });
+        let state2 = space.alloc_arena_state_with_value(RealVectorState {
+            values: DVector::from_vec(vec![1.0, 1.5]),
+        });
+        assert_almost_eq!(space.distance(&state1, &state2), 0.5, f64::EPSILON);
 
-    let mut result = space.alloc_state();
-    space.interpolate(&state1, &state2, 0.5, &mut result);
-    assert_eq!(
-        space
-            .clone_state_inner_value(&result)
-            .downcast::<RealVectorState>()
-            .unwrap()
-            .values,
-        DVector::from_vec(vec![0.75, 1.5, 54.0])
-    );
-    // assert_almost_eq!();
+        space.with_state_mut(&state2, |state| {
+            state.values[1] = 1.;
+        });
+        assert_almost_eq!(
+            space.distance(&state1, &state2),
+            (2.0f64 * 0.5 * 0.5).sqrt(),
+            f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn test_rv_interpolate() {
+        let mut space = RealVectorStateSpace::new();
+
+        space.add_dimension(None, 0.0, 1.0);
+        space.add_dimension(None, 1.0, 1.9);
+        space.add_dimension(None, 100.0, 100.9);
+
+        let state1 = space.alloc_arena_state_with_value(RealVectorState {
+            values: DVector::from_vec(vec![0.5, 1.5, 8.0]),
+        });
+        let state1_same = space.alloc_arena_state_with_value(RealVectorState {
+            values: DVector::from_vec(vec![0.5, 1.5, 8.0]),
+        });
+        let state2 = space.alloc_arena_state_with_value(RealVectorState {
+            values: DVector::from_vec(vec![1.0, 1.5, 100.0]),
+        });
+
+        assert!(state1 == state1);
+        assert!(state1 != state2);
+        assert!(space.equal_states(&state1, &state1_same));
+        assert!(!space.equal_states(&state1, &state2));
+
+        let mut result = space.alloc_state();
+        space.interpolate(&state1, &state2, 0.5, &mut result);
+        assert_eq!(
+            space
+                .clone_state_inner_value(&result)
+                .downcast::<RealVectorState>()
+                .unwrap()
+                .values,
+            DVector::from_vec(vec![0.75, 1.5, 54.0])
+        );
+        // assert_almost_eq!();
+    }
 }

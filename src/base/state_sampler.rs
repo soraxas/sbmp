@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use downcast_rs::{impl_downcast, Downcast, DowncastSync};
-use nalgebra::zero;
+use downcast_rs::{impl_downcast, Downcast};
 
 use crate::prelude::CanStateAllocateTrait;
 
 use super::{
-    state::{CompoundState, State},
     state_allocator::StateId,
     statespace::{CompoundStateSpace, StateSpace},
 };

@@ -1357,9 +1357,9 @@ fn test_ordering() {
 
                 let ans = a.get3_mut_uncheck(idxes[i], idxes[j], idxes[k]).unwrap();
 
-                assert!(((&ans).0) == &i);
-                assert!(((&ans).1) == &j);
-                assert!(((&ans).2) == &k);
+                assert!((ans.0) == &i);
+                assert!((ans.1) == &j);
+                assert!((ans.2) == &k);
             }
         }
     }
