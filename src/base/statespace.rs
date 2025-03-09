@@ -12,35 +12,13 @@ use sbmp_derive::{state_id_into_inner, WithStateAlloc, WithStateSpaceData};
 use crate::prelude::CanStateAllocateTrait;
 
 use super::param::ParamSet;
-use super::state::State;
+use super::state::{CompoundState, State};
 use super::state_allocator::{StateAllocator, StateId};
 use super::state_sampler::StateSampler;
 
 pub const DEFAULT_PROJECTION_NAME: &str = "";
 
 pub enum StateSpaceType {}
-
-pub struct CompoundState {
-    pub components: Vec<StateId>,
-}
-
-impl fmt::Debug for CompoundState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CompoundState")
-            .field("components", &"<...>")
-            .finish()
-    }
-}
-
-impl CompoundState {
-    pub fn new() -> Self {
-        Self {
-            components: Vec::new(),
-        }
-    }
-}
-
-impl State for CompoundState {}
 
 #[derive(Debug)]
 struct SubstateLocation {

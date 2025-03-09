@@ -26,6 +26,8 @@ impl PartialEq for StateId {
 
 impl Eq for StateId {}
 
+/// A state allocator that allocates states of type `T`.
+/// This allocator uses an `Arena` to store the states.
 #[derive(Debug)]
 pub struct StateAllocator<T>(RefCell<Arena<T>>)
 where
@@ -39,10 +41,12 @@ where
         Self(RefCell::new(Arena::with_capacity(capacity)))
     }
 
+    #[inline(always)]
     pub fn borrow(&self) -> std::cell::Ref<Arena<T>> {
         self.0.borrow()
     }
 
+    #[inline(always)]
     pub fn borrow_mut(&self) -> std::cell::RefMut<Arena<T>> {
         self.0.borrow_mut()
     }

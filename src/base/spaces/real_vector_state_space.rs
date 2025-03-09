@@ -4,9 +4,11 @@ use sbmp_derive::{state_id_into_inner, WithStateAlloc, WithStateSpaceData};
 use statrs::assert_almost_eq;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::base::state::{self, State};
 use crate::base::state_allocator::{StateAllocator, StateId};
+use crate::base::state_sampler::StateSampler;
 use crate::base::statespace::{HasStateSpaceData, StateSpace, StateSpaceCommonData};
 use crate::datastructure::arena::Arena;
 use crate::prelude::CanStateAllocateTrait;
@@ -162,36 +164,39 @@ impl StateSpace for RealVectorStateSpace {
     }
 }
 
-pub struct RealVectorStateSampler<'a> {
-    space: &'a RealVectorStateSpace,
+pub struct RealVectorStateSampler {
+    space: Arc<dyn StateSpace>,
     rng: RNG,
 }
 
-impl<'a> RealVectorStateSampler<'a> {
-    pub fn new(space: &'a RealVectorStateSpace) -> Self {
+impl StateSampler for RealVectorStateSampler {
+    fn from_state_space(space: Arc<dyn StateSpace>) -> Self {
         Self {
             space,
             rng: RNG::new(),
         }
     }
 
-    pub fn sample_uniform(&mut self, state: &mut StateId) {
-        self.space.with_state_mut(state, |state| {
+    fn sample_uniform(&mut self, state: &mut StateId) {
+        let space = self.space.downcast_ref::<RealVectorStateSpace>().unwrap();
+
+        space.with_state_mut(state, |state| {
             let state = &mut state.values;
-            for (state, low, high) in izip!(state, &self.space.bounds.low, &self.space.bounds.high)
-            {
+            for (state, low, high) in izip!(state, &space.bounds.low, &space.bounds.high) {
                 *state = self.rng.uniform_real(*low, *high);
             }
         });
     }
 
-    pub fn sample_uniform_near(&mut self, state: &mut StateId, near: &StateId, distance: f64) {
-        self.space.with_2states_mut(state, near, |state, near| {
+    fn sample_uniform_near(&mut self, state: &mut StateId, near: &StateId, distance: f64) {
+        let space = self.space.downcast_ref::<RealVectorStateSpace>().unwrap();
+
+        space.with_2states_mut(state, near, |state, near| {
             let state = &mut state.values;
             let near = &near.values;
 
             for (state, near, low, high) in
-                izip!(state, near, &self.space.bounds.low, &self.space.bounds.high)
+                izip!(state, near, &space.bounds.low, &space.bounds.high)
             {
                 *state = self.rng.uniform_real(
                     f64::max(*low, *near - distance),
@@ -201,13 +206,15 @@ impl<'a> RealVectorStateSampler<'a> {
         });
     }
 
-    pub fn sample_gaussian(&mut self, state: &mut StateId, mean: &StateId, std_dev: f64) {
-        self.space.with_2states_mut(state, mean, |state, mean| {
+    fn sample_gaussian(&mut self, state: &mut StateId, mean: &StateId, std_dev: f64) {
+        let space = self.space.downcast_ref::<RealVectorStateSpace>().unwrap();
+
+        space.with_2states_mut(state, mean, |state, mean| {
             let state = &mut state.values;
             let mean = &mean.values;
 
             for (state, mean, low, high) in
-                izip!(state, mean, &self.space.bounds.low, &self.space.bounds.high)
+                izip!(state, mean, &space.bounds.low, &space.bounds.high)
             {
                 *state = self.rng.gaussian(*mean, std_dev).clamp(*low, *high);
             }
@@ -247,9 +254,10 @@ fn test_rv_sample() {
     space.add_dimension(None, 0.0, 1.0);
     space.add_dimension(None, 1.0, 1.9);
 
+    let space = Arc::new(space);
     let mut state1 = space.alloc_state();
 
-    let mut sampler = RealVectorStateSampler::new(&space);
+    let mut sampler = RealVectorStateSampler::from_state_space(space.clone());
 
     for _ in 0..100 {
         sampler.sample_uniform(&mut state1);
