@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, Once};
 use anyhow::{anyhow, Result};
 
 use downcast_rs::{impl_downcast, Downcast, DowncastSync};
-use sbmp_derive::{WithArenaAlloc, WithStateSpaceData};
+use sbmp_derive::{state_id_into_inner, WithArenaAlloc, WithStateSpaceData};
 
 use super::param::ParamSet;
 use super::state::{self, State};
@@ -136,11 +136,12 @@ pub trait CanStateAllocateTrait {
     }
 
     /// Helper function to clone the inner value of a state.
+    #[state_id_into_inner]
     fn clone_state_inner_value(&self, source: &StateId) -> Box<dyn State>
     where
         Self::State: Clone,
     {
-        self.with_state(source, |state| Box::new((*state).clone()))
+        Box::new((*source).clone())
     }
 
     /// Given a state id, this function runs a closure with the state.
@@ -695,23 +696,6 @@ pub struct CompoundStateSpace {
     // ...other fields...
 }
 
-// impl CanStateAllocateTrait for CompoundStateSpace {
-
-//     type State = CompoundState;
-
-//     fn new_arena() -> Arena<Self::State> {
-//         Arena::with_capacity(3)
-//     }
-
-//     fn get_arena_mut(&mut self) -> &mut Arena<Self::State> {
-//         &mut self.arena
-//     }
-
-//     fn get_arena(&self) -> &Arena<Self::State> {
-//         &self.arena
-//     }
-// }
-
 impl fmt::Debug for CompoundStateSpace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompoundStateSpace")
@@ -835,6 +819,7 @@ impl StateSpace for CompoundStateSpace {
 
     fn compute_signature(&self, signature: &mut Vec<i32>) {
         // Implement logic to compute the signature of the state space
+        todo!();
     }
 
     fn get_dimension(&self) -> u32 {
@@ -857,57 +842,54 @@ impl StateSpace for CompoundStateSpace {
             .product()
     }
 
+    #[state_id_into_inner]
     fn enforce_bounds(&self, state: &mut StateId) {
-        self.with_state_mut(state, |state| {
-            for (component, substate) in self.components.iter().zip(&mut state.components) {
-                component.enforce_bounds(substate);
-            }
-        });
+        for (component, substate) in self.components.iter().zip(&mut state.components) {
+            component.enforce_bounds(substate);
+        }
     }
 
+    #[state_id_into_inner]
     fn satisfies_bounds(&self, state: &StateId) -> bool {
-        self.with_state(state, |state| {
-            self.components
-                .iter()
-                .zip(&state.components)
-                .all(|(component, substate)| component.satisfies_bounds(substate))
-        })
+        self.components
+            .iter()
+            .zip(&state.components)
+            .all(|(component, substate)| component.satisfies_bounds(substate))
     }
 
+    #[state_id_into_inner]
     fn copy_state(&self, destination: &mut StateId, source: &StateId) {
-        self.with_2states_mut(source, destination, |source, destination| {
-            for (component, (d, s)) in self
-                .components
-                .iter()
-                .zip(destination.components.iter_mut().zip(&source.components))
-            {
-                component.copy_state(d, s);
-            }
-        });
+        for (component, (d, s)) in self
+            .components
+            .iter()
+            .zip(destination.components.iter_mut().zip(&source.components))
+        {
+            component.copy_state(d, s);
+        }
     }
 
     fn clone_state(&self, source: &StateId) -> StateId {
+        // first we create a new compound state
         let mut clone = CompoundState::new();
-
+        // extract the components from the source state
         self.with_state_mut(source, |source| {
             for (component, s) in self.components.iter().zip(&source.components) {
                 clone.components.push(component.clone_state(s));
             }
         });
-
+        // we finally insert the compound state into the arena
         self.alloc_arena_state_with_value(clone)
     }
 
+    #[state_id_into_inner]
     fn distance(&self, state1: &StateId, state2: &StateId) -> f64 {
-        self.with_2states(state1, state2, |state1, state2| {
-            self.components
-                .iter()
-                .zip(&self.weights)
-                .map(|(component, &weight)| {
-                    weight * component.distance(&state1.components[0], &state2.components[0])
-                })
-                .sum()
-        })
+        self.components
+            .iter()
+            .zip(&self.weights)
+            .map(|(component, &weight)| {
+                weight * component.distance(&state1.components[0], &state2.components[0])
+            })
+            .sum()
     }
 
     // fn get_serialization_length(&self) -> u32 {
@@ -940,27 +922,25 @@ impl StateSpace for CompoundStateSpace {
     //     }
     // }
 
+    #[state_id_into_inner]
     fn equal_states(&self, state1: &StateId, state2: &StateId) -> bool {
-        self.with_2states(state1, state2, |state1, state2| {
-            self.components
-                .iter()
-                .zip(&state1.components)
-                .zip(&state2.components)
-                .all(|((component, s1), s2)| component.equal_states(s1, s2))
-        })
+        self.components
+            .iter()
+            .zip(&state1.components)
+            .zip(&state2.components)
+            .all(|((component, s1), s2)| component.equal_states(s1, s2))
     }
 
+    #[state_id_into_inner]
     fn interpolate(&self, from: &StateId, to: &StateId, t: f64, state: &mut StateId) {
-        self.with_3states_mut(from, to, state, |from, to, state| {
-            for (i, component) in self.components.iter().enumerate() {
-                component.interpolate(
-                    &from.components[i],
-                    &to.components[i],
-                    t,
-                    &mut state.components[i],
-                );
-            }
-        });
+        for (i, component) in self.components.iter().enumerate() {
+            component.interpolate(
+                &from.components[i],
+                &to.components[i],
+                t,
+                &mut state.components[i],
+            );
+        }
     }
 
     // fn alloc_default_state_sampler(self: &Arc<Self>) -> Arc<dyn StateSampler> {

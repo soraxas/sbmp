@@ -1,7 +1,7 @@
 use itertools::izip;
 use nalgebra::DVector;
 use rand::Rng;
-use sbmp_derive::{WithArenaAlloc, WithStateSpaceData};
+use sbmp_derive::{state_id_into_inner, WithArenaAlloc, WithStateSpaceData};
 use statrs::assert_almost_eq;
 use std::cell::RefCell;
 use std::cmp;
@@ -111,56 +111,48 @@ impl StateSpace for RealVectorStateSpace {
             .product()
     }
 
+    #[state_id_into_inner]
     fn enforce_bounds(&self, state: &mut StateId) {
-        self.with_state_mut(state, |state| {
-            for (s, low, high) in
-                izip!(state.values.iter_mut(), &self.bounds.low, &self.bounds.high)
-            {
-                *s = s.clamp(*low, *high);
-            }
-        });
+        for (s, low, high) in izip!(state.values.iter_mut(), &self.bounds.low, &self.bounds.high) {
+            *s = s.clamp(*low, *high);
+        }
     }
 
+    #[state_id_into_inner]
     fn satisfies_bounds(&self, state: &StateId) -> bool {
-        self.with_state(state, |state| {
-            state
-                .values
-                .iter()
-                .zip(&self.bounds.low)
-                .zip(&self.bounds.high)
-                .all(|((s, low), high)| s - f64::EPSILON > *low && s + f64::EPSILON < *high)
-        })
+        state
+            .values
+            .iter()
+            .zip(&self.bounds.low)
+            .zip(&self.bounds.high)
+            .all(|((s, low), high)| s - f64::EPSILON > *low && s + f64::EPSILON < *high)
     }
 
+    #[state_id_into_inner]
     fn distance(&self, state1: &StateId, state2: &StateId) -> f64 {
-        self.with_2states(state1, state2, |state1, state2| {
-            (&state1.values - &state2.values).norm()
-        })
+        (&state1.values - &state2.values).norm()
     }
 
+    #[state_id_into_inner]
     fn equal_states(&self, state1: &StateId, state2: &StateId) -> bool {
-        self.with_2states(state1, state2, |state1, state2| {
-            (&state1.values - &state2.values)
-                .abs()
-                .iter()
-                .all(|x| *x <= f64::EPSILON * 2.0)
-        })
+        (&state1.values - &state2.values)
+            .abs()
+            .iter()
+            .all(|x| *x <= f64::EPSILON * 2.0)
     }
 
+    #[state_id_into_inner]
     fn interpolate(&self, from: &StateId, to: &StateId, t: f64, state: &mut StateId) {
-        self.with_3states_mut(from, to, state, |from, to, state| {
-            state.values = &from.values + (&to.values - &from.values) * t;
-        });
+        state.values = &from.values + (&to.values - &from.values) * t;
     }
 
     fn setup(&mut self) {
         todo!()
     }
 
+    #[state_id_into_inner]
     fn copy_state(&self, destination: &mut StateId, source: &StateId) {
-        self.with_2states_mut(destination, source, |destination, source| {
-            destination.values.copy_from(&source.values);
-        });
+        destination.values.copy_from(&source.values);
     }
 
     fn alloc_state(&self) -> StateId where {

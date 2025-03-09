@@ -2,9 +2,10 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, Ident, Meta,
-    NestedMeta, Type,
+    parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, FnArg, Ident,
+    ItemFn, Meta, NestedMeta, Pat, PatType, Type,
 };
+
 
 /// Derive macro that automatically implements the `HasStateSpaceData` trait for a struct.
 ///
@@ -91,14 +92,13 @@ pub fn with_arena_alloc_derive(input: TokenStream) -> TokenStream {
                 let ident = syn::Ident::new(&lit_str.value(), lit_str.span());
                 state_type = Some(ident);
             }
-        }
-        else if meta_name_value.path.is_ident("default_capacity") {
+        } else if meta_name_value.path.is_ident("default_capacity") {
             if let syn::Lit::Str(lit_str) = &meta_name_value.lit {
                 // the literal should be a positive integer
-                match  lit_str.value().parse::<usize>() {
+                match lit_str.value().parse::<usize>() {
                     Ok(num) => {
                         default_capacity = num;
-                    },
+                    }
                     Err(_) => {
                         return syn::Error::new_spanned(
                             meta_name_value,
@@ -109,11 +109,13 @@ pub fn with_arena_alloc_derive(input: TokenStream) -> TokenStream {
                     }
                 }
             }
-        }
-        else {
+        } else {
             return syn::Error::new_spanned(
                 &meta_name_value,
-                format!("Unknown attribute: {:?}", meta_name_value.path.get_ident().unwrap()),
+                format!(
+                    "Unknown attribute: {:?}",
+                    meta_name_value.path.get_ident().unwrap()
+                ),
             )
             .to_compile_error()
             .into();
@@ -127,7 +129,6 @@ pub fn with_arena_alloc_derive(input: TokenStream) -> TokenStream {
                 .into();
         }
     };
-
 
     let mut arena_found = false;
 
@@ -181,6 +182,157 @@ pub fn with_arena_alloc_derive(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// A procedural macro that transforms functions with `StateId` parameters.
+/// It automatically wraps the function body inside a `with_state_mut` call for any `StateId` parameters
+/// (both mutable and immutable). The macro counts how many `StateId` parameters are present, and
+/// ensures there are between 1 and 3 `StateId` references in the function. All other parameters are
+/// passed through unchanged.
+///
+/// Note that if all `StateId` parameters are immutable, the transformed states will be immutable.
+/// But if any `StateId` parameter is mutable, all transformed states will be mutable.
+///
+/// # Example
+///
+/// ```rust
+/// impl StateSpace for CompoundStateSpace {
+///     #[state_id_into_inner]
+///     fn distance(&self, state1: &StateId, state2: &mut StateId) -> f64 {
+///         (&state1.values - &state2.values).norm()
+///     }
+/// }
+/// ```
+/// which transforms into:
+/// ```rust
+/// impl StateSpace for CompoundStateSpace {
+///    fn distance(&self, state1: &StateId, state2: &mut StateId) -> f64 {
+///       self.with_2states_mut(state1, state2,
+///          |state1: &mut CopoundState, state2: &mut CopoundState| {
+///          (&state1.values - &state2.values).norm()
+///      })
+///   }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn state_id_into_inner(_args: TokenStream, input: TokenStream) -> TokenStream {
+    // Parse the input function as an AST (Abstract Syntax Tree)
+    let input_fn = parse_macro_input!(input as ItemFn);
+
+    // Extract function name, parameters, and body
+    let fn_name = &input_fn.sig.ident;
+    let inputs = &input_fn.sig.inputs;
+    let return_type = &input_fn.sig.output;
+    let block = &input_fn.block;
+    let where_clause = &input_fn.sig.generics.where_clause;
+
+    // Check if any parameter has the `mut` keyword
+    let mut has_mut = false;
+
+    // Store the parameters
+    let mut state_ids = Vec::new();
+    // Iterate through function parameters
+    for input in inputs {
+        match input {
+            FnArg::Typed(pat_type) => {
+                // Check if the type is `StateId`
+                if let Type::Reference(ref_type) = &*pat_type.ty {
+                    if let Type::Path(type_path) = &*ref_type.elem {
+                        if type_path.path.is_ident("StateId") {
+                            has_mut |= ref_type.mutability.is_some();
+
+                            match &*pat_type.pat {
+                                Pat::Ident(ident) => {
+                                    state_ids.push(ident.ident.clone()); // Capture `StateId` references
+                                }
+                                _ => {
+                                    return syn::Error::new_spanned(
+                                        &pat_type.pat,
+                                        "Expected parameter to be an identifier.",
+                                    )
+                                    .into_compile_error()
+                                    .into();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // If the number of mutable parameters is not between 1 and 3, return an error
+    if state_ids.is_empty() || state_ids.len() > 3 {
+        return syn::Error::new_spanned(
+            &input_fn.sig,
+            "This macro only supports between 1 and 3 (mutable) `StateId` parameters.",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // Generate the appropriate `with_state_mut` call based on the number of state parameters
+    let with_state_mut_call = match state_ids.len() {
+        1 => {
+            let state_id = &state_ids[0];
+            let function = if has_mut {
+                quote! { with_state_mut }
+            } else {
+                quote! { with_state }
+            };
+            quote! {
+                self.#function(#state_id, |#state_id| {
+                    #block
+                })
+            }
+        }
+        2 => {
+            let state_id0 = &state_ids[0];
+            let state_id1 = &state_ids[1];
+            let function = if has_mut {
+                quote! { with_2states_mut }
+            } else {
+                quote! { with_2states }
+            };
+            quote! {
+                self.#function(#state_id0, #state_id1, |#state_id0, #state_id1| {
+                    #block
+                })
+            }
+        }
+        3 => {
+            let state_id0 = &state_ids[0];
+            let state_id1 = &state_ids[1];
+            let state_id2 = &state_ids[2];
+            let function = if has_mut {
+                quote! { with_3states_mut }
+            } else {
+                unreachable!("Currently, getting 3 states without mut is not implemented.");
+                // return syn::Error::new_spanned(
+                //     &input_fn.sig,
+                //     "Currently, getting 3 states without mut is not implemented.",
+                // )
+            };
+
+            quote! {
+                self.#function(#state_id0, #state_id1, #state_id2, |#state_id0, #state_id1, #state_id2| {
+                    #block
+                })
+            }
+        }
+        _ => unreachable!(), // Already validated above
+    };
+
+    // Generate the new function code with `with_state_mut`
+    let generated = quote! {
+        fn #fn_name(#inputs) #return_type #where_clause{
+            #with_state_mut_call
+        }
+    };
+
+    // Return the generated code as a TokenStream
+    generated.into()
+}
+
 struct MetaNameValueIterator<'a> {
     attributes: &'a Vec<Attribute>,
     attr_idx: usize,
@@ -189,7 +341,11 @@ struct MetaNameValueIterator<'a> {
 
 impl MetaNameValueIterator<'_> {
     fn new(attributes: &Vec<Attribute>) -> MetaNameValueIterator {
-        MetaNameValueIterator { attributes, attr_idx: 0, meta_idx: 0 }
+        MetaNameValueIterator {
+            attributes,
+            attr_idx: 0,
+            meta_idx: 0,
+        }
     }
 }
 
@@ -201,7 +357,9 @@ impl Iterator for MetaNameValueIterator<'_> {
             let attr = &self.attributes[self.attr_idx];
             if let Ok(Meta::List(meta_list)) = attr.parse_meta() {
                 while self.meta_idx < meta_list.nested.len() {
-                    if let NestedMeta::Meta(Meta::NameValue(name_value)) = &meta_list.nested[self.meta_idx] {
+                    if let NestedMeta::Meta(Meta::NameValue(name_value)) =
+                        &meta_list.nested[self.meta_idx]
+                    {
                         self.meta_idx += 1;
                         return Some(name_value.clone());
                     }
