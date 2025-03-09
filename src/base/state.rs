@@ -1,12 +1,13 @@
 use downcast_rs::{impl_downcast, DowncastSync};
 
-pub trait State: DowncastSync {
+pub trait State: DowncastSync + std::fmt::Debug {
     // fn as_any<T>(&self) -> T;
 
     // fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 impl_downcast!(sync State);
 
+#[derive(Debug)]
 pub struct CompoundState {
     pub components: Vec<Box<dyn State>>,
 }

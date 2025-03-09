@@ -490,6 +490,133 @@ impl<T> Arena<T> {
         }
     }
 
+    pub fn get2_uncheck(&self, i1: Index, i2: Index) -> Option<(&T, &T)> {
+        // NOTE: we assume that i1 and i2 are valid indices,
+        // and that they are not the same.
+        debug_assert_ne!(i1, i2);
+
+        let (raw_item1, raw_item2) = {
+            if i1.index < i2.index {
+                let (xs, ys) = self.items.split_at(i2.index as usize);
+                (&xs[i1.index as usize], &ys[0])
+            } else {
+                let (xs, ys) = self.items.split_at(i1.index as usize);
+                (&ys[0], &xs[i2.index as usize])
+            }
+        };
+
+        match (raw_item1, raw_item2) {
+            (
+                Entry::Occupied {
+                    generation: gen1,
+                    value: item1,
+                },
+                Entry::Occupied {
+                    generation: gen2,
+                    value: item2,
+                },
+            ) if (*gen1 == i1.generation && *gen2 == i2.generation) => Some((item1, item2)),
+            _ => None,
+        }
+    }
+
+    pub fn get2_mut_uncheck(&mut self, i1: Index, i2: Index) -> Option<(&mut T, &mut T)> {
+        // NOTE: we assume that i1 and i2 are valid indices,
+        // and that they are not the same.
+        debug_assert_ne!(i1, i2);
+
+        let (raw_item1, raw_item2) = {
+            if i1.index < i2.index {
+                let (xs, ys) = self.items.split_at_mut(i2.index as usize);
+                (&mut xs[i1.index as usize], &mut ys[0])
+            } else {
+                let (xs, ys) = self.items.split_at_mut(i1.index as usize);
+                (&mut ys[0], &mut xs[i2.index as usize])
+            }
+        };
+
+        match (raw_item1, raw_item2) {
+            (
+                Entry::Occupied {
+                    generation: gen1,
+                    value: item1,
+                },
+                Entry::Occupied {
+                    generation: gen2,
+                    value: item2,
+                },
+            ) if (*gen1 == i1.generation && *gen2 == i2.generation) => Some((item1, item2)),
+            _ => None,
+        }
+    }
+
+    pub fn get3_mut_uncheck(
+        &mut self,
+        i1: Index,
+        i2: Index,
+        i3: Index,
+    ) -> Option<(&mut T, &mut T, &mut T)> {
+        // NOTE: we assume that i1, i2 and i3 are valid indices,
+        // and that they are not the same.
+        debug_assert_ne!(i1, i2);
+        debug_assert_ne!(i1, i3);
+        debug_assert_ne!(i2, i3);
+
+        // if i1.index == i2.index || i1.index == i3.index || i2.index == i3.index {
+        //     return None;
+        // }
+
+        let (raw_item1, raw_item2, raw_item3) = {
+            if i1.index < i2.index && i2.index < i3.index {
+                let (xs, rest) = self.items.split_at_mut(i2.index as usize);
+                let (ys, zs) = rest.split_at_mut((i3.index - i2.index) as usize);
+                (&mut xs[i1.index as usize], &mut ys[0], &mut zs[0])
+            } else if i1.index < i3.index && i3.index < i2.index {
+                let (xs, rest) = self.items.split_at_mut(i3.index as usize);
+                let (ys, zs) = rest.split_at_mut((i2.index - i3.index) as usize);
+                (&mut xs[i1.index as usize], &mut zs[0], &mut ys[0])
+            } else if i2.index < i1.index && i1.index < i3.index {
+                let (xs, rest) = self.items.split_at_mut(i1.index as usize);
+                let (ys, zs) = rest.split_at_mut((i3.index - i1.index) as usize);
+                (&mut ys[0], &mut xs[i2.index as usize], &mut zs[0])
+            } else if i2.index < i3.index && i3.index < i1.index {
+                let (xs, rest) = self.items.split_at_mut(i3.index as usize);
+                let (ys, zs) = rest.split_at_mut((i1.index - i3.index) as usize);
+                (&mut zs[0], &mut xs[i2.index as usize], &mut ys[0])
+            } else if i3.index < i1.index && i1.index < i2.index {
+                let (xs, rest) = self.items.split_at_mut(i1.index as usize);
+                let (ys, zs) = rest.split_at_mut((i2.index - i1.index) as usize);
+                (&mut ys[0], &mut zs[0], &mut xs[i3.index as usize])
+            } else if i3.index < i2.index && i2.index < i1.index {
+                let (xs, rest) = self.items.split_at_mut(i2.index as usize);
+                let (ys, zs) = rest.split_at_mut((i1.index - i2.index) as usize);
+                (&mut zs[0], &mut ys[0], &mut xs[i3.index as usize])
+            } else {
+                unreachable!()
+            }
+        };
+
+        match (raw_item1, raw_item2, raw_item3) {
+            (
+                Entry::Occupied {
+                    generation: gen1,
+                    value: item1,
+                },
+                Entry::Occupied {
+                    generation: gen2,
+                    value: item2,
+                },
+                Entry::Occupied {
+                    generation: gen3,
+                    value: item3,
+                },
+            ) if (*gen1 == i1.generation && *gen2 == i2.generation && *gen3 == i3.generation) => {
+                Some((item1, item2, item3))
+            }
+            _ => None,
+        }
+    }
+
     /// Get a pair of exclusive references to the elements at index `i1` and `i2` if it is in the
     /// arena.
     ///
@@ -798,6 +925,36 @@ impl<T> Arena<T> {
             )),
             _ => None,
         }
+    }
+
+    /// Get the next free slot in the arena, allocating more capacity if necessary.
+    ///
+    /// The difference with `insert` is that this method does not insert any value in the arena.
+    /// Where the slot is allocated, but the previous value is not removed.
+    ///
+    #[inline]
+    pub fn alloc(&mut self) -> Index
+    where
+        T: Default,
+    {
+        match self.try_alloc_next_index() {
+            None => self.alloc_slow_path(),
+            Some(index) => {
+                self.items[index.index as usize] = Entry::Occupied {
+                    generation: self.generation,
+                    value: T::default(),
+                };
+                index
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn alloc_slow_path(&mut self) -> Index {
+        let len = self.items.len();
+        self.reserve(len);
+        self.try_alloc_next_index()
+            .expect("alloc will always succeed after reserving additional space")
     }
 }
 
@@ -1177,5 +1334,33 @@ impl<T> ops::Index<Index> for Arena<T> {
 impl<T> ops::IndexMut<Index> for Arena<T> {
     fn index_mut(&mut self, index: Index) -> &mut Self::Output {
         self.get_mut(index).expect("No element at index")
+    }
+}
+
+#[test]
+fn test_ordering() {
+    let mut a = Arena::new();
+    let mut idxes = vec![];
+
+    let range = 0..10;
+
+    for i in range.clone() {
+        idxes.push(a.insert(i));
+    }
+
+    for i in range.clone() {
+        for j in range.clone() {
+            for k in range.clone() {
+                if i == j || j == k || k == i {
+                    continue;
+                }
+
+                let ans = a.get3_mut_uncheck(idxes[i], idxes[j], idxes[k]).unwrap();
+
+                assert!(((&ans).0) == &i);
+                assert!(((&ans).1) == &j);
+                assert!(((&ans).2) == &k);
+            }
+        }
     }
 }

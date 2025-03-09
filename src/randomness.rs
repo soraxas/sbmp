@@ -247,8 +247,8 @@ mod tests {
             handles.push(handle);
         }
         for handle in handles {
-            let seed = handle.join().unwrap();
-            println!("seed: {}", seed);
+            let _seed = handle.join().unwrap();
+            // println!("seed: {}", seed);
         }
     }
 }

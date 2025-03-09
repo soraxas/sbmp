@@ -1,26 +1,32 @@
 use itertools::izip;
 use nalgebra::DVector;
 use rand::Rng;
-use sbmp_derive::WithStateSpaceData;
+use sbmp_derive::{WithArenaAlloc, WithStateSpaceData};
+use statrs::assert_almost_eq;
+use std::cell::RefCell;
 use std::cmp;
 use std::collections::HashMap;
 use std::f64::consts::E;
 use std::f64::EPSILON;
 
-use crate::base::state::State;
-use crate::base::statespace::{HasStateSpaceData, StateSpace, StateSpaceCommonData};
-use crate::downcast_state;
+use crate::base::state::{self, State};
+use crate::base::statespace::{
+    CanStateAllocateTrait, HasStateSpaceData, StateId, StateSpace, StateSpaceCommonData,
+};
+use crate::datastructure::arena::Arena;
 use crate::randomness::RNG;
 
 use super::real_vector_bounds::RealVectorBounds;
 
 // write a derive macro that automatically add a member struct of type HashMap<String, usize> with name HAHA to the struct
 
-#[derive(Debug, WithStateSpaceData)]
+#[derive(Debug, WithStateSpaceData, WithArenaAlloc)]
+#[arena_alloc(state_type = "RealVectorState")]
 pub struct RealVectorStateSpace {
     state_space_data: StateSpaceCommonData,
+    arena: RefCell<Arena<RealVectorState>>,
     state_bytes: usize,
-    pub(crate) dimension: usize,
+    // pub(crate) dimension: u32,
     pub(crate) bounds: RealVectorBounds,
     pub(crate) dimension_names: Vec<String>,
     pub(crate) dimension_index: HashMap<String, usize>,
@@ -32,7 +38,7 @@ impl Default for RealVectorStateSpace {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RealVectorState {
     pub values: DVector<f64>,
 }
@@ -43,7 +49,8 @@ impl RealVectorStateSpace {
     pub fn new() -> Self {
         Self {
             state_space_data: StateSpaceCommonData::default(),
-            dimension: 0,
+            arena: Self::new_arena(),
+            // dimension: 0,
             state_bytes: 0,
             bounds: RealVectorBounds {
                 low: vec![],
@@ -55,25 +62,20 @@ impl RealVectorStateSpace {
     }
 
     pub fn add_dimension(&mut self, name: Option<String>, min_bound: f64, max_bound: f64) {
-        self.dimension += 1;
-        self.state_bytes = self.dimension * std::mem::size_of::<f64>();
         self.bounds.low.push(min_bound);
         self.bounds.high.push(max_bound);
         self.dimension_names.push(name.unwrap_or_default());
+        self.state_bytes = self.dimension_names.len() * std::mem::size_of::<f64>();
     }
 
     pub fn set_bounds(&mut self, bounds: RealVectorBounds) {
         bounds.check();
         assert_eq!(
             bounds.low.len(),
-            self.dimension,
+            bounds.high.len(),
             "Bounds do not match dimension of state space"
         );
         self.bounds = bounds;
-    }
-
-    pub fn get_dimension(&self) -> usize {
-        self.dimension
     }
 
     pub fn get_dimension_name(&self, index: usize) -> &str {
@@ -86,15 +88,10 @@ impl RealVectorStateSpace {
     }
 }
 
-// support ref or mut
-macro_rules! cast_to_rv_state {
-    // Catch-all pattern for all input, calls downcast_state! with 'from' and 'RealVectorState'
-    ($($input:tt)*) => {
-        downcast_state!($($input)*, RealVectorState)
-    };
-}
-
 impl StateSpace for RealVectorStateSpace {
+    fn get_dimension(&self) -> u32 {
+        self.bounds.low.len() as u32
+    }
     fn get_maximum_extent(&self) -> f64 {
         self.bounds
             .low
@@ -114,49 +111,66 @@ impl StateSpace for RealVectorStateSpace {
             .product()
     }
 
-    fn enforce_bounds(&self, state: &mut dyn State) {
-        let state = &mut cast_to_rv_state!(mut state).values;
-        for (s, low, high) in izip!(state, &self.bounds.low, &self.bounds.high) {
-            *s = s.clamp(*low, *high);
-        }
+    fn enforce_bounds(&self, state: &mut StateId) {
+        self.with_state_mut(state, |state| {
+            for (s, low, high) in
+                izip!(state.values.iter_mut(), &self.bounds.low, &self.bounds.high)
+            {
+                *s = s.clamp(*low, *high);
+            }
+        });
     }
 
-    fn satisfies_bounds(&self, state: &dyn State) -> bool {
-        let state = &cast_to_rv_state!(state).values;
-
-        state
-            .iter()
-            .zip(&self.bounds.low)
-            .zip(&self.bounds.high)
-            .all(|((s, low), high)| s - f64::EPSILON > *low && s + f64::EPSILON < *high)
+    fn satisfies_bounds(&self, state: &StateId) -> bool {
+        self.with_state(state, |state| {
+            state
+                .values
+                .iter()
+                .zip(&self.bounds.low)
+                .zip(&self.bounds.high)
+                .all(|((s, low), high)| s - f64::EPSILON > *low && s + f64::EPSILON < *high)
+        })
     }
 
-    fn distance(&self, state1: &dyn State, state2: &dyn State) -> f64 {
-        let state1 = &cast_to_rv_state!(state1).values;
-        let state2 = &cast_to_rv_state!(state2).values;
-        (state1 - state2).norm()
+    fn distance(&self, state1: &StateId, state2: &StateId) -> f64 {
+        self.with_2states(state1, state2, |state1, state2| {
+            (&state1.values - &state2.values).norm()
+        })
     }
 
-    fn equal_states(&self, state1: &dyn State, state2: &dyn State) -> bool {
-        let state1 = &cast_to_rv_state!(state1).values;
-        let state2 = &cast_to_rv_state!(state2).values;
-
-        (state1 - state2)
-            .abs()
-            .iter()
-            .all(|x| *x <= f64::EPSILON * 2.0)
+    fn equal_states(&self, state1: &StateId, state2: &StateId) -> bool {
+        self.with_2states(state1, state2, |state1, state2| {
+            (&state1.values - &state2.values)
+                .abs()
+                .iter()
+                .all(|x| *x <= f64::EPSILON * 2.0)
+        })
     }
 
-    fn interpolate(&self, from: &dyn State, to: &dyn State, time: f64, state: &mut dyn State) {
-        let from = &cast_to_rv_state!(from).values;
-        let to = &cast_to_rv_state!(to).values;
-        let state = &mut cast_to_rv_state!(mut state).values;
-
-        *state = from + (to - from) * time;
+    fn interpolate(&self, from: &StateId, to: &StateId, t: f64, state: &mut StateId) {
+        self.with_3states_mut(from, to, state, |from, to, state| {
+            state.values = &from.values + (&to.values - &from.values) * t;
+        });
     }
 
     fn setup(&mut self) {
         todo!()
+    }
+
+    fn copy_state(&self, destination: &mut StateId, source: &StateId) {
+        self.with_2states_mut(destination, source, |destination, source| {
+            destination.values.copy_from(&source.values);
+        });
+    }
+
+    fn alloc_state(&self) -> StateId where {
+        self.alloc_arena_state_with_value(RealVectorState {
+            values: DVector::zeros(self.dimension_names.len()),
+        })
+    }
+
+    fn free_state(&self, state: &StateId) {
+        self.free_arena_state(state);
     }
 }
 
@@ -173,35 +187,141 @@ impl<'a> RealVectorStateSampler<'a> {
         }
     }
 
-    pub fn sample_uniform(&mut self, state: &mut dyn State) {
-        let state = &mut cast_to_rv_state!(mut state).values;
-        for (state, low, high) in izip!(state, &self.space.bounds.low, &self.space.bounds.high) {
-            *state = self.rng.uniform_real(*low, *high);
-        }
+    pub fn sample_uniform(&mut self, state: &mut StateId) {
+        self.space.with_state_mut(state, |state| {
+            let state = &mut state.values;
+            for (state, low, high) in izip!(state, &self.space.bounds.low, &self.space.bounds.high)
+            {
+                *state = self.rng.uniform_real(*low, *high);
+            }
+        });
     }
 
-    pub fn sample_uniform_near(&mut self, state: &mut dyn State, near: &dyn State, distance: f64) {
-        let state = &mut cast_to_rv_state!(mut state).values;
-        let near = &cast_to_rv_state!(near).values;
+    pub fn sample_uniform_near(&mut self, state: &mut StateId, near: &StateId, distance: f64) {
+        self.space.with_2states_mut(state, near, |state, near| {
+            let state = &mut state.values;
+            let near = &near.values;
 
-        for (state, near, low, high) in
-            izip!(state, near, &self.space.bounds.low, &self.space.bounds.high)
-        {
-            *state = self.rng.uniform_real(
-                f64::max(*low, near - distance),
-                f64::min(*high, near + distance),
-            );
-        }
+            for (state, near, low, high) in
+                izip!(state, near, &self.space.bounds.low, &self.space.bounds.high)
+            {
+                *state = self.rng.uniform_real(
+                    f64::max(*low, *near - distance),
+                    f64::min(*high, *near + distance),
+                );
+            }
+        });
     }
 
-    pub fn sample_gaussian(&mut self, state: &mut dyn State, mean: &dyn State, std_dev: f64) {
-        let state = &mut cast_to_rv_state!(mut state).values;
-        let mean = &cast_to_rv_state!(mean).values;
+    pub fn sample_gaussian(&mut self, state: &mut StateId, mean: &StateId, std_dev: f64) {
+        self.space.with_2states_mut(state, mean, |state, mean| {
+            let state = &mut state.values;
+            let mean = &mean.values;
 
-        for (state, mean, low, high) in
-            izip!(state, mean, &self.space.bounds.low, &self.space.bounds.high)
-        {
-            *state = self.rng.gaussian(*mean, std_dev).clamp(*low, *high);
-        }
+            for (state, mean, low, high) in
+                izip!(state, mean, &self.space.bounds.low, &self.space.bounds.high)
+            {
+                *state = self.rng.gaussian(*mean, std_dev).clamp(*low, *high);
+            }
+        });
     }
+}
+
+#[test]
+fn test_rv_distance() {
+    let mut space = RealVectorStateSpace::new();
+
+    space.add_dimension(None, 0.0, 1.0);
+    space.add_dimension(None, 1.0, 1.9);
+
+    let state1 = space.alloc_arena_state_with_value(RealVectorState {
+        values: DVector::from_vec(vec![0.5, 1.5]),
+    });
+    let state2 = space.alloc_arena_state_with_value(RealVectorState {
+        values: DVector::from_vec(vec![1.0, 1.5]),
+    });
+    assert_almost_eq!(space.distance(&state1, &state2), 0.5, f64::EPSILON);
+
+    space.with_state_mut(&state2, |state| {
+        state.values[1] = 1.;
+    });
+    assert_almost_eq!(
+        space.distance(&state1, &state2),
+        (2.0f64 * 0.5 * 0.5).sqrt(),
+        f64::EPSILON
+    );
+}
+
+#[test]
+fn test_rv_sample() {
+    let mut space = RealVectorStateSpace::new();
+
+    space.add_dimension(None, 0.0, 1.0);
+    space.add_dimension(None, 1.0, 1.9);
+
+    let mut state1 = space.alloc_state();
+
+    let mut sampler = RealVectorStateSampler::new(&space);
+
+    for _ in 0..100 {
+        sampler.sample_uniform(&mut state1);
+        // dbg!(space.clone_state_inner_value(&state1)
+        space.with_state(&state1, |state| {
+            assert!(0. < state.values[0] && state.values[0] < 1.);
+            assert!(1. < state.values[1] && state.values[1] < 1.9);
+        });
+    }
+
+    let state1 = space.alloc_arena_state_with_value(RealVectorState {
+        values: DVector::from_vec(vec![0.5, 1.5]),
+    });
+    let state2 = space.alloc_arena_state_with_value(RealVectorState {
+        values: DVector::from_vec(vec![1.0, 1.5]),
+    });
+    assert_almost_eq!(space.distance(&state1, &state2), 0.5, f64::EPSILON);
+
+    space.with_state_mut(&state2, |state| {
+        state.values[1] = 1.;
+    });
+    assert_almost_eq!(
+        space.distance(&state1, &state2),
+        (2.0f64 * 0.5 * 0.5).sqrt(),
+        f64::EPSILON
+    );
+}
+
+#[test]
+fn test_rv_interpolate() {
+    let mut space = RealVectorStateSpace::new();
+
+    space.add_dimension(None, 0.0, 1.0);
+    space.add_dimension(None, 1.0, 1.9);
+    space.add_dimension(None, 100.0, 100.9);
+
+    let state1 = space.alloc_arena_state_with_value(RealVectorState {
+        values: DVector::from_vec(vec![0.5, 1.5, 8.0]),
+    });
+    let state1_same = space.alloc_arena_state_with_value(RealVectorState {
+        values: DVector::from_vec(vec![0.5, 1.5, 8.0]),
+    });
+    let state2 = space.alloc_arena_state_with_value(RealVectorState {
+        values: DVector::from_vec(vec![1.0, 1.5, 100.0]),
+    });
+
+    assert!(state1 == state1);
+    assert!(state1 != state2);
+    assert!(space.equal_states(&state1, &state1_same));
+    assert!(!space.equal_states(&state1, &state2));
+
+    let mut result = space.alloc_state();
+    space.interpolate(&state1, &state2, 0.5, &mut result);
+    assert_eq!(
+        space
+            .clone_state_inner_value(&result)
+            .downcast::<RealVectorState>()
+            .unwrap()
+            .values,
+        DVector::from_vec(vec![0.75, 1.5, 54.0])
+    );
+    // assert_almost_eq!();
 }

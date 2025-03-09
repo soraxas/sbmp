@@ -1,5 +1,6 @@
 use core::fmt;
 use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::f64::EPSILON;
 use std::fmt::Debug;
@@ -8,11 +9,11 @@ use std::sync::{Arc, Mutex, Once};
 
 use anyhow::{anyhow, Result};
 
-use downcast_rs::{impl_downcast, DowncastSync};
-use sbmp_derive::WithStateSpaceData;
+use downcast_rs::{impl_downcast, Downcast, DowncastSync};
+use sbmp_derive::{WithArenaAlloc, WithStateSpaceData};
 
 use super::param::ParamSet;
-use super::state::State;
+use super::state::{self, State};
 use super::state_sampler::{CompoundStateSampler, StateSampler};
 
 pub const DEFAULT_PROJECTION_NAME: &str = "";
@@ -20,7 +21,15 @@ pub const DEFAULT_PROJECTION_NAME: &str = "";
 pub enum StateSpaceType {}
 
 pub struct CompoundState {
-    pub components: Vec<Box<dyn State>>,
+    pub components: Vec<StateId>,
+}
+
+impl fmt::Debug for CompoundState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompoundState")
+            .field("components", &"<...>")
+            .finish()
+    }
 }
 
 impl CompoundState {
@@ -66,17 +75,143 @@ impl AsCompoundTrait for Arc<dyn StateSpace> {
 /// The provided closure is called for each state space.
 /// This is a depth-first search.
 fn visit_all_space(state_space: &dyn StateSpace, f: &mut impl FnMut(&dyn StateSpace)) {
-    let mut queue: VecDeque<&dyn StateSpace> = VecDeque::new();
-    queue.push_back(state_space);
+    // queue.push_back(state_space);
+
+    f(state_space);
 
     if let Some(space) = state_space.as_compound_ref() {
         // call the closure for the state
-        f(state_space);
 
         for component in &space.components {
-            queue.push_back(component.as_ref());
+            // let component = component.get_mut();
+
             visit_all_space(component.as_ref(), f);
         }
+    }
+}
+
+use crate::datastructure::arena::{Arena, Index};
+
+/// A unique identifier for a state in a state space.
+/// This is an index into the state space's arena.
+/// The index is unique within the state space.
+/// If the index is used in a different state space, it is meaningless.
+#[derive(Debug)]
+pub struct StateId(Index);
+
+impl From<Index> for StateId {
+    fn from(index: Index) -> Self {
+        Self(index)
+    }
+}
+
+impl PartialEq for StateId {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for StateId {}
+
+pub trait CanStateAllocateTrait {
+    type State: State;
+
+    fn new_arena() -> RefCell<Arena<Self::State>>;
+
+    fn get_arena(&self) -> &RefCell<Arena<Self::State>>;
+
+    fn alloc_arena_state(&self) -> StateId
+    where
+        Self::State: Default,
+    {
+        self.get_arena().borrow_mut().alloc().into()
+    }
+
+    fn alloc_arena_state_with_value(&self, state: Self::State) -> StateId {
+        self.get_arena().borrow_mut().insert(state).into()
+    }
+
+    fn free_arena_state(&self, state: &StateId) {
+        self.get_arena().borrow_mut().remove(state.0);
+    }
+
+    /// Helper function to clone the inner value of a state.
+    fn clone_state_inner_value(&self, source: &StateId) -> Box<dyn State>
+    where
+        Self::State: Clone,
+    {
+        self.with_state(source, |state| Box::new((*state).clone()))
+    }
+
+    /// Given a state id, this function runs a closure with the state.
+    #[inline(always)]
+    fn with_state<T>(&self, state: &StateId, mut closure: impl FnMut(&Self::State) -> T) -> T {
+        let arena = self.get_arena().borrow();
+        let state = arena
+            .get(state.0)
+            .expect("State not found. Already freed? Or this Id is not for this state space?");
+
+        closure(state)
+    }
+
+    #[inline(always)]
+    fn with_state_mut<T>(
+        &self,
+        state: &StateId,
+        mut closure: impl FnMut(&mut Self::State) -> T,
+    ) -> T {
+        let mut arena = self.get_arena().borrow_mut();
+        let state = arena
+            .get_mut(state.0)
+            .expect("State not found. Already freed? Or this Id is not for this state space?");
+
+        closure(state)
+    }
+
+    #[inline(always)]
+    fn with_2states<T>(
+        &self,
+        state1: &StateId,
+        state2: &StateId,
+        mut closure: impl FnMut(&Self::State, &Self::State) -> T,
+    ) -> T {
+        let arena = self.get_arena().borrow();
+        let states = arena
+            .get2_uncheck(state1.0, state2.0)
+            .expect("State not found. Already freed? Or this Id is not for this state space?");
+
+        closure(states.0, states.1)
+    }
+
+    #[inline(always)]
+    fn with_2states_mut<T>(
+        &self,
+        state1: &StateId,
+        state2: &StateId,
+        mut closure: impl FnMut(&mut Self::State, &mut Self::State) -> T,
+    ) -> T {
+        let mut arena = self.get_arena().borrow_mut();
+        let states = arena
+            .get2_mut_uncheck(state1.0, state2.0)
+            .expect("State not found. Already freed? Or this Id is not for this state space?");
+
+        closure(states.0, states.1)
+    }
+
+    #[inline(always)]
+    fn with_3states_mut<T>(
+        &self,
+        state1: &StateId,
+        state2: &StateId,
+        state3: &StateId,
+        mut closure: impl FnMut(&mut Self::State, &mut Self::State, &mut Self::State) -> T,
+    ) -> T {
+        let mut arena = self.get_arena().borrow_mut();
+        let states = arena
+            .get3_mut_uncheck(state1.0, state2.0, state3.0)
+            .expect("State not found. Already freed? Or this Id is not for this state space?");
+
+        closure(states.0, states.1, states.2)
     }
 }
 
@@ -85,7 +220,20 @@ pub trait HasStateSpaceData {
     fn state_space_data_mut(&mut self) -> &mut StateSpaceCommonData;
 }
 
-pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
+// impl<T> CanCloneStateInnerValue for CanStateAllocateTrait
+// where
+//     T: Downcast + Debug,
+// {
+//     fn state_space_data(&self) -> &StateSpaceCommonData {
+//         self.as_any().downcast_ref::<StateSpaceCommonData>().unwrap()
+//     }
+
+//     fn state_space_data_mut(&mut self) -> &mut StateSpaceCommonData {
+//         self.as_any_mut().downcast_mut::<StateSpaceCommonData>().unwrap()
+//     }
+// }
+
+pub trait StateSpace: HasStateSpaceData + Downcast + Debug {
     fn is_compound(&self) -> bool {
         false
     }
@@ -96,6 +244,10 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
 
     fn as_compound_ref(&self) -> Option<&CompoundStateSpace> {
         self.as_any().downcast_ref::<CompoundStateSpace>()
+    }
+
+    fn as_compound_mut(&mut self) -> Option<&mut CompoundStateSpace> {
+        self.as_any_mut().downcast_mut::<CompoundStateSpace>()
     }
 
     fn is_hybrid(&self) -> bool {
@@ -180,7 +332,7 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
         self.state_space_data_mut().longest_valid_segment_fraction = segment_fraction;
     }
 
-    fn valid_segment_count(&self, state1: &dyn State, state2: &dyn State) -> u32 {
+    fn valid_segment_count(&self, state1: &StateId, state2: &StateId) -> u32 {
         // Implement logic to return the valid segment count
         self.state_space_data().longest_valid_segment_count_factor
             * (self.distance(state1, state2) / self.state_space_data().longest_valid_segment).ceil()
@@ -214,23 +366,28 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
     fn get_dimension(&self) -> u32;
     fn get_maximum_extent(&self) -> f64;
     fn get_measure(&self) -> f64;
-    fn enforce_bounds(&self, state: &mut dyn State);
-    fn satisfies_bounds(&self, state: &dyn State) -> bool;
-    fn copy_state(&self, destination: &mut dyn State, source: &dyn State);
-    fn clone_state(&self, source: &dyn State) -> Box<dyn State>;
-    fn distance(&self, state1: &dyn State, state2: &dyn State) -> f64;
+    fn enforce_bounds(&self, state: &mut StateId);
+    fn satisfies_bounds(&self, state: &StateId) -> bool;
+    fn copy_state(&self, destination: &mut StateId, source: &StateId);
+    fn distance(&self, state1: &StateId, state2: &StateId) -> f64;
     // fn get_serialization_length(&self) -> u32;
-    // fn serialize(&self, serialization: &mut [u8], state: &dyn State);
-    // fn deserialize(&self, state: &mut dyn State, serialization: &[u8]);
-    fn equal_states(&self, state1: &dyn State, state2: &dyn State) -> bool;
-    fn interpolate(&self, from: &dyn State, to: &dyn State, t: f64, state: &mut dyn State);
+    // fn serialize(&self, serialization: &mut [u8], state: &StateId);
+    // fn deserialize(&self, state: &mut StateId, serialization: &[u8]);
+    fn equal_states(&self, state1: &StateId, state2: &StateId) -> bool;
+    fn interpolate(&self, from: &StateId, to: &StateId, t: f64, state: &mut StateId);
     // fn alloc_state_sampler(&self) -> Arc<dyn StateSampler>;
     // fn set_state_sampler_allocator(&mut self, ssa: Box<dyn Fn(&Self) -> Arc<dyn StateSampler>>);
     // fn clear_state_sampler_allocator(&mut self);
-    fn alloc_state(&self) -> Box<dyn State>;
-    fn free_state(&self, state: Box<dyn State>);
+    fn alloc_state(&self) -> StateId;
+    fn free_state(&self, state: &StateId);
 
-    fn get_value_address_at_index_const(&self, state: &dyn State, index: u32) -> Option<&f64> {
+    fn clone_state(&self, source: &StateId) -> StateId {
+        let mut state = self.alloc_state();
+        self.copy_state(&mut state, source);
+        state
+    }
+
+    fn get_value_address_at_index_const(&self, state: &StateId, index: u32) -> Option<&f64> {
         // Implement logic to get the value address at index (const)
         todo!();
 
@@ -253,7 +410,7 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
 
     fn get_value_address_at_location(
         &self,
-        state: &mut dyn State,
+        state: &mut StateId,
         loc: &ValueLocation,
     ) -> Option<&mut f64> {
         // Implement logic to get the value address at location
@@ -264,7 +421,7 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
 
     fn get_value_address_at_location_const(
         &self,
-        state: &dyn State,
+        state: &StateId,
         loc: &ValueLocation,
     ) -> Option<&f64> {
         // Implement logic to get the value address at location (const)
@@ -273,26 +430,26 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
         None
     }
 
-    fn get_value_address_at_name(&self, state: &mut dyn State, name: &str) -> Option<&mut f64> {
+    fn get_value_address_at_name(&self, state: &mut StateId, name: &str) -> Option<&mut f64> {
         // Implement logic to get the value address at name
         todo!();
 
         None
     }
 
-    fn get_value_address_at_name_const(&self, state: &dyn State, name: &str) -> Option<&f64> {
+    fn get_value_address_at_name_const(&self, state: &StateId, name: &str) -> Option<&f64> {
         // Implement logic to get the value address at name (const)
         todo!();
 
         None
     }
 
-    fn copy_to_reals(&self, reals: &mut Vec<f64>, source: &dyn State) {
+    fn copy_to_reals(&self, reals: &mut Vec<f64>, source: &StateId) {
         // Implement logic to copy to reals
         todo!();
     }
 
-    fn copy_from_reals(&self, destination: &mut dyn State, reals: &Vec<f64>) {
+    fn copy_from_reals(&self, destination: &mut StateId, reals: &Vec<f64>) {
         // Implement logic to copy from reals
         todo!();
     }
@@ -341,13 +498,13 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
         &self.state_space_data().projections
     }
 
-    fn get_value_address_at_index(&self, state: &mut dyn State, index: u32) -> Option<&mut f64> {
+    fn get_value_address_at_index(&self, state: &mut StateId, index: u32) -> Option<&mut f64> {
         // Implement logic to get the value address at index
         todo!();
         None
     }
 
-    fn print_state(&self, state: &dyn State) {
+    fn print_state(&self, state: &StateId) {
         // Implement logic to print a state
         todo!();
     }
@@ -381,18 +538,18 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
 
     fn get_substate_at_location(
         &self,
-        state: &mut dyn State,
+        state: &mut StateId,
         loc: &SubstateLocation,
-    ) -> Option<&mut dyn State> {
+    ) -> Option<&mut StateId> {
         // Implement logic to get a substate at location
         None
     }
 
     fn get_substate_at_location_const(
         &self,
-        state: &dyn State,
+        state: &StateId,
         loc: &SubstateLocation,
-    ) -> Option<&dyn State> {
+    ) -> Option<&StateId> {
         // Implement logic to get a substate at location (const)
         None
     }
@@ -415,7 +572,7 @@ pub trait StateSpace: HasStateSpaceData + DowncastSync + Debug {
 
     fn setup(&mut self);
 }
-impl_downcast!(sync StateSpace);
+impl_downcast!(StateSpace);
 
 pub fn diagram(out: &mut String, state_space: &dyn StateSpace) {
     out.push_str("digraph StateSpace {\n");
@@ -525,14 +682,46 @@ impl Default for StateSpaceCommonData {
     }
 }
 
-#[derive(Debug, WithStateSpaceData)]
+#[derive(WithStateSpaceData, WithArenaAlloc)]
+#[arena_alloc(state_type = "CompoundState")]
+// #[arena_alloc(default_capacity = 150)]
 pub struct CompoundStateSpace {
     state_space_data: StateSpaceCommonData,
+    arena: RefCell<Arena<CompoundState>>,
     components: Vec<Arc<dyn StateSpace>>,
     weights: Vec<f64>,
     weight_sum: f64,
     locked: bool,
     // ...other fields...
+}
+
+// impl CanStateAllocateTrait for CompoundStateSpace {
+
+//     type State = CompoundState;
+
+//     fn new_arena() -> Arena<Self::State> {
+//         Arena::with_capacity(3)
+//     }
+
+//     fn get_arena_mut(&mut self) -> &mut Arena<Self::State> {
+//         &mut self.arena
+//     }
+
+//     fn get_arena(&self) -> &Arena<Self::State> {
+//         &self.arena
+//     }
+// }
+
+impl fmt::Debug for CompoundStateSpace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompoundStateSpace")
+            .field("state_space_data", &self.state_space_data)
+            .field("components", &"<...>")
+            .field("weights", &self.weights)
+            .field("weight_sum", &self.weight_sum)
+            .field("locked", &self.locked)
+            .finish()
+    }
 }
 
 lazy_static::lazy_static! {
@@ -542,6 +731,7 @@ lazy_static::lazy_static! {
 impl Default for CompoundStateSpace {
     fn default() -> Self {
         Self {
+            arena: Self::new_arena(),
             state_space_data: StateSpaceCommonData::default(),
             components: Vec::new(),
             weights: Vec::new(),
@@ -667,58 +857,57 @@ impl StateSpace for CompoundStateSpace {
             .product()
     }
 
-    fn enforce_bounds(&self, state: &mut dyn State) {
-        let cstate = state.downcast_mut::<CompoundState>().unwrap();
-        for (component, substate) in self.components.iter().zip(&mut cstate.components) {
-            component.enforce_bounds(substate.as_mut());
-        }
+    fn enforce_bounds(&self, state: &mut StateId) {
+        self.with_state_mut(state, |state| {
+            for (component, substate) in self.components.iter().zip(&mut state.components) {
+                component.enforce_bounds(substate);
+            }
+        });
     }
 
-    fn satisfies_bounds(&self, state: &dyn State) -> bool {
-        let cstate = state.downcast_ref::<CompoundState>().unwrap();
-        self.components
-            .iter()
-            .zip(&cstate.components)
-            .all(|(component, substate)| component.satisfies_bounds(substate.as_ref()))
+    fn satisfies_bounds(&self, state: &StateId) -> bool {
+        self.with_state(state, |state| {
+            self.components
+                .iter()
+                .zip(&state.components)
+                .all(|(component, substate)| component.satisfies_bounds(substate))
+        })
     }
 
-    fn copy_state(&self, destination: &mut dyn State, source: &dyn State) {
-        let cdest = destination.downcast_mut::<CompoundState>().unwrap();
-        let csrc = source.downcast_ref::<CompoundState>().unwrap();
-        for (component, (d, s)) in self
-            .components
-            .iter()
-            .zip(cdest.components.iter_mut().zip(&csrc.components))
-        {
-            component.copy_state(d.as_mut(), s.as_ref());
-        }
-    }
-
-    fn clone_state(&self, source: &dyn State) -> Box<dyn State> {
-        let csrc = source.downcast_ref::<CompoundState>().unwrap();
-        let mut clone = CompoundState::new();
-        for component in &self.components {
-            clone
+    fn copy_state(&self, destination: &mut StateId, source: &StateId) {
+        self.with_2states_mut(source, destination, |source, destination| {
+            for (component, (d, s)) in self
                 .components
-                .push(component.clone_state(csrc.components[0].as_ref()));
-        }
-        Box::new(clone)
+                .iter()
+                .zip(destination.components.iter_mut().zip(&source.components))
+            {
+                component.copy_state(d, s);
+            }
+        });
     }
 
-    fn distance(&self, state1: &dyn State, state2: &dyn State) -> f64 {
-        let cstate1 = state1.downcast_ref::<CompoundState>().unwrap();
-        let cstate2 = state2.downcast_ref::<CompoundState>().unwrap();
-        self.components
-            .iter()
-            .zip(&self.weights)
-            .map(|(component, &weight)| {
-                weight
-                    * component.distance(
-                        cstate1.components[0].as_ref(),
-                        cstate2.components[0].as_ref(),
-                    )
-            })
-            .sum()
+    fn clone_state(&self, source: &StateId) -> StateId {
+        let mut clone = CompoundState::new();
+
+        self.with_state_mut(source, |source| {
+            for (component, s) in self.components.iter().zip(&source.components) {
+                clone.components.push(component.clone_state(s));
+            }
+        });
+
+        self.alloc_arena_state_with_value(clone)
+    }
+
+    fn distance(&self, state1: &StateId, state2: &StateId) -> f64 {
+        self.with_2states(state1, state2, |state1, state2| {
+            self.components
+                .iter()
+                .zip(&self.weights)
+                .map(|(component, &weight)| {
+                    weight * component.distance(&state1.components[0], &state2.components[0])
+                })
+                .sum()
+        })
     }
 
     // fn get_serialization_length(&self) -> u32 {
@@ -729,7 +918,7 @@ impl StateSpace for CompoundStateSpace {
     // }
 
     // fn serialize(&self, serialization: &mut [u8], state: &dyn State) {
-    //     let cstate = state.downcast_ref::<CompoundState>().unwrap();
+    //     let cstate = downcast_state!(state, CompoundState);
     //     let mut offset = 0;
     //     for (component, substate) in self.components.iter().zip(&cstate.components) {
     //         let length = component.get_serialization_length() as usize;
@@ -742,7 +931,7 @@ impl StateSpace for CompoundStateSpace {
     // }
 
     // fn deserialize(&self, state: &mut dyn State, serialization: &[u8]) {
-    //     let cstate = state.downcast_mut::<CompoundState>().unwrap();
+    //     let cstate = downcast_state!(mut state, CompoundState););
     //     let mut offset = 0;
     //     for (component, substate) in self.components.iter().zip(&mut cstate.components) {
     //         let length = component.get_serialization_length() as usize;
@@ -751,34 +940,27 @@ impl StateSpace for CompoundStateSpace {
     //     }
     // }
 
-    fn equal_states(&self, state1: &dyn State, state2: &dyn State) -> bool {
-        let cstate1 = state1.downcast_ref::<CompoundState>().unwrap();
-        let cstate2 = state2.downcast_ref::<CompoundState>().unwrap();
-        self.components
-            .iter()
-            .zip(&cstate1.components)
-            .zip(&cstate2.components)
-            .all(|((component, s1), s2)| component.equal_states(s1.as_ref(), s2.as_ref()))
+    fn equal_states(&self, state1: &StateId, state2: &StateId) -> bool {
+        self.with_2states(state1, state2, |state1, state2| {
+            self.components
+                .iter()
+                .zip(&state1.components)
+                .zip(&state2.components)
+                .all(|((component, s1), s2)| component.equal_states(s1, s2))
+        })
     }
 
-    fn interpolate(&self, from: &dyn State, to: &dyn State, t: f64, state: &mut dyn State) {
-        match (
-            from.downcast_ref::<CompoundState>(),
-            to.downcast_ref::<CompoundState>(),
-            state.downcast_mut::<CompoundState>(),
-        ) {
-            (Some(cfrom), Some(cto), Some(cstate)) => {
-                for (i, component) in self.components.iter().enumerate() {
-                    component.interpolate(
-                        cfrom.components[i].as_ref(),
-                        cto.components[i].as_ref(),
-                        t,
-                        cstate.components[i].as_mut(),
-                    );
-                }
+    fn interpolate(&self, from: &StateId, to: &StateId, t: f64, state: &mut StateId) {
+        self.with_3states_mut(from, to, state, |from, to, state| {
+            for (i, component) in self.components.iter().enumerate() {
+                component.interpolate(
+                    &from.components[i],
+                    &to.components[i],
+                    t,
+                    &mut state.components[i],
+                );
             }
-            _ => panic!("Invalid state type"),
-        }
+        });
     }
 
     // fn alloc_default_state_sampler(self: &Arc<Self>) -> Arc<dyn StateSampler> {
@@ -795,19 +977,21 @@ impl StateSpace for CompoundStateSpace {
     //     // Implement logic to clear the state sampler allocator
     // }
 
-    fn alloc_state(&self) -> Box<dyn State> {
-        let mut state = CompoundState::new();
+    fn alloc_state(&self) -> StateId {
+        let mut cstate = CompoundState::new();
         for component in &self.components {
-            state.components.push(component.alloc_state());
+            cstate.components.push(component.alloc_state());
         }
-        Box::new(state)
+        self.alloc_arena_state_with_value(cstate)
     }
 
-    fn free_state(&self, state: Box<dyn State>) {
-        // let cstate = state.downcast::<CompoundState>().unwrap();
-        // for (component, substate) in self.components.iter().zip(cstate.components) {
-        //     component.free_state(substate);
-        // }
+    fn free_state(&self, state: &StateId) {
+        self.with_state(state, |cstate| {
+            for (component, substate) in self.components.iter().zip(cstate.components.iter()) {
+                component.free_state(substate);
+            }
+        });
+        self.free_arena_state(state);
     }
 
     fn setup(&mut self) {
