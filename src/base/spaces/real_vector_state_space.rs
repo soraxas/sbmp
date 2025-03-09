@@ -1,5 +1,5 @@
 use itertools::izip;
-use nalgebra::DVector;
+use nalgebra::{DVector, SimdPartialOrd};
 use sbmp_derive::{state_id_into_inner, WithStateAlloc, WithStateSpaceData};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,8 +48,8 @@ impl RealVectorStateSpace {
             // dimension: 0,
             state_bytes: 0,
             bounds: RealVectorBounds {
-                low: vec![],
-                high: vec![],
+                low: DVector::zeros(0),
+                high: DVector::zeros(0),
             },
             dimension_names: vec![],
             dimension_index: HashMap::new(),
@@ -57,8 +57,8 @@ impl RealVectorStateSpace {
     }
 
     pub fn add_dimension(&mut self, name: Option<String>, min_bound: f64, max_bound: f64) {
-        self.bounds.low.push(min_bound);
-        self.bounds.high.push(max_bound);
+        self.bounds.low = self.bounds.low.push(min_bound);
+        self.bounds.high = self.bounds.high.push(max_bound);
         self.dimension_names.push(name.unwrap_or_default());
         self.state_bytes = self.dimension_names.len() * std::mem::size_of::<f64>();
     }
@@ -88,22 +88,11 @@ impl StateSpace for RealVectorStateSpace {
         self.bounds.low.len() as u32
     }
     fn get_maximum_extent(&self) -> f64 {
-        self.bounds
-            .low
-            .iter()
-            .zip(&self.bounds.high)
-            .map(|(low, high)| (high - low).powi(2))
-            .sum::<f64>()
-            .sqrt()
+        (&self.bounds.low - &self.bounds.high).norm()
     }
 
     fn get_measure(&self) -> f64 {
-        self.bounds
-            .low
-            .iter()
-            .zip(&self.bounds.high)
-            .map(|(low, high)| high - low)
-            .product()
+        self.bounds.get_volume()
     }
 
     #[state_id_into_inner]
@@ -111,6 +100,7 @@ impl StateSpace for RealVectorStateSpace {
         for (s, low, high) in izip!(state.values.iter_mut(), &self.bounds.low, &self.bounds.high) {
             *s = s.clamp(*low, *high);
         }
+        // state.values = state.values.clone().simd_clamp(self.bounds.low.clone(), self.bounds.high.clone());
     }
 
     #[state_id_into_inner]

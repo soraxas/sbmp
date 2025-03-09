@@ -1,7 +1,7 @@
 use sbmp_derive::state_id_into_inner;
 use std::cell::RefCell;
 
-use super::state::{State};
+use super::state::State;
 
 use crate::datastructure::arena::{Arena, Index};
 

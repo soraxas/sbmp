@@ -1,18 +1,18 @@
+use nalgebra::DVector;
+
 #[derive(Debug, Clone)]
 pub struct RealVectorBounds {
-    pub(crate) low: Vec<f64>,
-    pub(crate) high: Vec<f64>,
+    pub(crate) low: DVector<f64>,
+    pub(crate) high: DVector<f64>,
 }
 
 impl RealVectorBounds {
     /// Constructor; `dim` represents the dimension of the space these bounds are for.
     pub fn new(dim: usize) -> Self {
-        let mut bounds = RealVectorBounds {
-            low: vec![0.0; dim],
-            high: vec![0.0; dim],
-        };
-        bounds.resize(dim);
-        bounds
+        Self {
+            low: DVector::zeros(dim),
+            high: DVector::zeros(dim),
+        }
     }
 
     /// Set the lower bound in each dimension to a specific value
@@ -45,26 +45,13 @@ impl RealVectorBounds {
 
     /// Change the number of dimensions for the bounds
     pub fn resize(&mut self, size: usize) {
-        self.low.resize(size, 0.0);
-        self.high.resize(size, 0.0);
+        self.low = DVector::zeros(size);
+        self.high = DVector::zeros(size);
     }
 
     /// Compute the volume of the space enclosed by the bounds
     pub fn get_volume(&self) -> f64 {
-        self.low
-            .iter()
-            .zip(&self.high)
-            .map(|(l, h)| h - l)
-            .product()
-    }
-
-    /// Get the difference between the high and low bounds for each dimension
-    pub fn get_difference(&self) -> Vec<f64> {
-        self.low
-            .iter()
-            .zip(&self.high)
-            .map(|(l, h)| h - l)
-            .collect()
+        (&self.high - &self.low).iter().product()
     }
 
     /// Check if the bounds are valid (same length for low and high, high[i] > low[i])
