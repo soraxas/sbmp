@@ -3,9 +3,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields, FnArg, Ident,
-    ItemFn, Meta, NestedMeta, Pat, PatType, Type,
+    ItemFn, Meta, NestedMeta, Pat, Type,
 };
-
 
 /// Derive macro that automatically implements the `HasStateSpaceData` trait for a struct.
 ///
@@ -65,17 +64,17 @@ pub fn with_state_space_data_derive(input: TokenStream) -> TokenStream {
 /// The `CanStateAllocateTrait` trait is used to provide access to the `Arena` struct that is used
 /// to store the states.
 ///
-/// The struct must have a member named `arena` of type `Arena<#state_type>`.
+/// The struct must have a member named `state_allocator` of type `StateAllocator<#state_type>`.
 ///
 /// Example:
 /// ```
-/// #[derive(WithArenaAlloc)]
-/// #[arena_alloc(state_type = "MyState")]
+/// #[derive(WithStateAlloc)]
+/// #[state_alloc(state_type = "MyState")]
 /// struct MyStruct {
-///    arena: Arena<MyState>,
+///    state_allocator: StateAllocator<MyState>,
 /// }
 /// ```
-#[proc_macro_derive(WithArenaAlloc, attributes(arena_alloc))]
+#[proc_macro_derive(WithStateAlloc, attributes(state_alloc))]
 pub fn with_arena_alloc_derive(input: TokenStream) -> TokenStream {
     // Parse the input tokens into a syntax tree
     let input = parse_macro_input!(input as DeriveInput);
@@ -124,7 +123,7 @@ pub fn with_arena_alloc_derive(input: TokenStream) -> TokenStream {
     let state_type = match state_type {
         Some(state_type) => state_type,
         None => {
-            return syn::Error::new_spanned(input, "Missing required `arena_alloc` attribute")
+            return syn::Error::new_spanned(input, "Missing required `state_alloc` attribute")
                 .to_compile_error()
                 .into();
         }
@@ -132,30 +131,34 @@ pub fn with_arena_alloc_derive(input: TokenStream) -> TokenStream {
 
     let mut arena_found = false;
 
-    find_struct_field(&input.data, &Ident::new("arena", input.span()), |field| {
-        // Ensure that the field is of the correct type `Arena<#state_type>`
-        // find_segment_ident(field, "Arena", |segment| {
-        //     // Ensure the generic type of Arena matches `#state_type`
-        //     if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-        //         if let Some(syn::GenericArgument::Type(syn::Type::Path(type_path))) =
-        //             args.args.first()
-        //         {
-        //             if let Some(segment) = type_path.path.segments.last() {
-        //                 if segment.ident == state_type {
-        //                     arena_found = true;
-        //                 }
-        //             }
-        //         }
-        //     }
-        // });
-        arena_found = true;
-    });
+    find_struct_field(
+        &input.data,
+        &Ident::new("state_allocator", input.span()),
+        |field| {
+            // Ensure that the field is of the correct type `StateAllocator<#state_type>`
+            find_segment_ident(field, "StateAllocator", |segment| {
+                // Ensure the generic type of StateAllocator matches `#state_type`
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(syn::Type::Path(type_path))) =
+                        args.args.first()
+                    {
+                        if let Some(segment) = type_path.path.segments.last() {
+                            if segment.ident == state_type {
+                                arena_found = true;
+                            }
+                        }
+                    }
+                }
+            });
+            arena_found = true;
+        },
+    );
 
     // If the arena field with the correct type is not found, generate an error
     if !arena_found {
         return syn::Error::new_spanned(
             input,
-            format!("Struct must have a field `arena` of type `RefCell<Arena<{state_type}>>`"),
+            format!("Struct must have a field `state_allocator` of type `StateAllocator<{state_type}>`"),
         )
         .to_compile_error()
         .into();
@@ -165,15 +168,16 @@ pub fn with_arena_alloc_derive(input: TokenStream) -> TokenStream {
 
     // Generate the implementation
     let expanded = quote! {
-        impl CanStateAllocateTrait for #name {
+
+        impl crate::prelude::CanStateAllocateTrait for #name {
             type State = #state_type;
 
-            fn new_arena() -> RefCell<Arena<Self::State>> {
-                RefCell::new(Arena::with_capacity(#default_capacity))
+            fn new_state_allocator() -> StateAllocator<Self::State> {
+                StateAllocator::with_capacity(#default_capacity)
             }
 
-            fn get_arena(&self) -> &RefCell<Arena<Self::State>> {
-                &self.arena
+            fn get_state_allocator(&self) -> &StateAllocator<Self::State> {
+                &self.state_allocator
             }
         }
     };
@@ -325,6 +329,8 @@ pub fn state_id_into_inner(_args: TokenStream, input: TokenStream) -> TokenStrea
     // Generate the new function code with `with_state_mut`
     let generated = quote! {
         fn #fn_name(#inputs) #return_type #where_clause{
+            use crate::prelude::CanStateAllocateTrait;
+
             #with_state_mut_call
         }
     };

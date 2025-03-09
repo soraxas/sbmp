@@ -1,30 +1,26 @@
 use itertools::izip;
 use nalgebra::DVector;
-use rand::Rng;
-use sbmp_derive::{state_id_into_inner, WithArenaAlloc, WithStateSpaceData};
+use sbmp_derive::{state_id_into_inner, WithStateAlloc, WithStateSpaceData};
 use statrs::assert_almost_eq;
 use std::cell::RefCell;
-use std::cmp;
 use std::collections::HashMap;
-use std::f64::consts::E;
-use std::f64::EPSILON;
 
 use crate::base::state::{self, State};
-use crate::base::statespace::{
-    CanStateAllocateTrait, HasStateSpaceData, StateId, StateSpace, StateSpaceCommonData,
-};
+use crate::base::state_allocator::{StateAllocator, StateId};
+use crate::base::statespace::{HasStateSpaceData, StateSpace, StateSpaceCommonData};
 use crate::datastructure::arena::Arena;
+use crate::prelude::CanStateAllocateTrait;
 use crate::randomness::RNG;
 
 use super::real_vector_bounds::RealVectorBounds;
 
 // write a derive macro that automatically add a member struct of type HashMap<String, usize> with name HAHA to the struct
 
-#[derive(Debug, WithStateSpaceData, WithArenaAlloc)]
-#[arena_alloc(state_type = "RealVectorState")]
+#[derive(Debug, WithStateSpaceData, WithStateAlloc)]
+#[state_alloc(state_type = "RealVectorState")]
 pub struct RealVectorStateSpace {
     state_space_data: StateSpaceCommonData,
-    arena: RefCell<Arena<RealVectorState>>,
+    state_allocator: StateAllocator<RealVectorState>,
     state_bytes: usize,
     // pub(crate) dimension: u32,
     pub(crate) bounds: RealVectorBounds,
@@ -49,7 +45,7 @@ impl RealVectorStateSpace {
     pub fn new() -> Self {
         Self {
             state_space_data: StateSpaceCommonData::default(),
-            arena: Self::new_arena(),
+            state_allocator: Self::new_state_allocator(),
             // dimension: 0,
             state_bytes: 0,
             bounds: RealVectorBounds {
