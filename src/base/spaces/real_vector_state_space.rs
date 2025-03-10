@@ -2,6 +2,7 @@ use itertools::izip;
 use nalgebra::{DVector, SimdPartialOrd};
 use sbmp_derive::{state_id_into_inner, WithStateAlloc, WithStateSpaceData};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::base::state::State;
@@ -152,12 +153,12 @@ impl StateSpace for RealVectorStateSpace {
 }
 
 pub struct RealVectorStateSampler {
-    space: Arc<dyn StateSpace>,
+    space: Rc<dyn StateSpace>,
     rng: RNG,
 }
 
 impl StateSampler for RealVectorStateSampler {
-    fn from_state_space(space: Arc<dyn StateSpace>) -> Self {
+    fn from_state_space(space: Rc<dyn StateSpace>) -> Self {
         Self {
             space,
             rng: RNG::new(),
@@ -246,7 +247,7 @@ mod tests {
         space.add_dimension(None, 0.0, 1.0);
         space.add_dimension(None, 1.0, 1.9);
 
-        let space = Arc::new(space);
+        let space = Rc::new(space);
         let mut state1 = space.alloc_state();
 
         let mut sampler = RealVectorStateSampler::from_state_space(space.clone());
@@ -304,11 +305,7 @@ mod tests {
         let mut result = space.alloc_state();
         space.interpolate(&state1, &state2, 0.5, &mut result);
         assert_eq!(
-            space
-                .clone_state_inner_value(&result)
-                .downcast::<RealVectorState>()
-                .unwrap()
-                .values,
+            space.clone_state_inner_value(&result).values,
             DVector::from_vec(vec![0.75, 1.5, 54.0])
         );
         // assert_almost_eq!();

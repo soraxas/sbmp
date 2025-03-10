@@ -1,6 +1,7 @@
 use core::fmt;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
@@ -23,7 +24,7 @@ pub enum StateSpaceType {}
 #[derive(Debug)]
 struct SubstateLocation {
     pub chain: Vec<usize>,
-    pub space: Arc<dyn StateSpace>,
+    pub space: Rc<dyn StateSpace>,
 }
 
 #[derive(Debug)]
@@ -43,7 +44,7 @@ pub trait AsCompoundTrait {
     }
 }
 
-impl AsCompoundTrait for Arc<dyn StateSpace> {
+impl AsCompoundTrait for Rc<dyn StateSpace> {
     fn as_compound_ref(&self) -> Option<&CompoundStateSpace> {
         self.downcast_ref::<CompoundStateSpace>()
     }
@@ -136,7 +137,7 @@ pub trait StateSpace: HasStateSpaceData + Downcast + Debug {
         }
 
         // create a queue and push the current state space
-        let mut q: VecDeque<Arc<dyn StateSpace>> = VecDeque::new();
+        let mut q: VecDeque<Rc<dyn StateSpace>> = VecDeque::new();
 
         // push all subspaces
         if let Some(space) = self.as_compound_ref() {
@@ -541,7 +542,7 @@ impl Default for StateSpaceCommonData {
 pub struct CompoundStateSpace {
     state_space_data: StateSpaceCommonData,
     state_allocator: StateAllocator<CompoundState>,
-    components: Vec<Arc<dyn StateSpace>>,
+    components: Vec<Rc<dyn StateSpace>>,
     weights: Vec<f64>,
     weight_sum: f64,
     locked: bool,
@@ -580,7 +581,7 @@ impl Default for CompoundStateSpace {
 
 impl CompoundStateSpace {
     pub fn from_components(
-        mut components: Vec<Arc<dyn StateSpace>>,
+        mut components: Vec<Rc<dyn StateSpace>>,
         mut weights: Vec<f64>,
     ) -> Result<Self> {
         if components.len() != weights.len() {
@@ -596,7 +597,7 @@ impl CompoundStateSpace {
         Ok(space)
     }
 
-    pub fn add_subspace(&mut self, component: Arc<dyn StateSpace>, weight: f64) -> Result<()> {
+    pub fn add_subspace(&mut self, component: Rc<dyn StateSpace>, weight: f64) -> Result<()> {
         if self.locked {
             return Err(anyhow!(
                 "This state space is locked. No further components can be added"
@@ -623,7 +624,7 @@ impl CompoundStateSpace {
         self.components.len()
     }
 
-    pub fn get_subspace(&self, index: usize) -> &Arc<dyn StateSpace> {
+    pub fn get_subspace(&self, index: usize) -> &Rc<dyn StateSpace> {
         &self.components[index]
     }
 
@@ -631,7 +632,7 @@ impl CompoundStateSpace {
         self.weights[index]
     }
 
-    pub fn iter_component_and_weight(&self) -> impl Iterator<Item = (&Arc<dyn StateSpace>, &f64)> {
+    pub fn iter_component_and_weight(&self) -> impl Iterator<Item = (&Rc<dyn StateSpace>, &f64)> {
         self.components.iter().zip(&self.weights)
     }
 

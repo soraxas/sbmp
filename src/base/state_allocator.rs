@@ -81,11 +81,11 @@ pub trait CanStateAllocateTrait {
 
     /// Helper function to clone the inner value of a state.
     #[state_id_into_inner]
-    fn clone_state_inner_value(&self, source: &StateId) -> Box<dyn State>
+    fn clone_state_inner_value(&self, source: &StateId) -> Self::State
     where
         Self::State: Clone,
     {
-        Box::new((*source).clone())
+        (*source).clone()
     }
 
     /// Given a state id, this function runs a closure with the state.

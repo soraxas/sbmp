@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use downcast_rs::{impl_downcast, Downcast};
 
@@ -10,7 +10,7 @@ use super::{
 };
 
 pub trait StateSampler: Downcast {
-    fn from_state_space(space: Arc<dyn StateSpace>) -> Self
+    fn from_state_space(space: Rc<dyn StateSpace>) -> Self
     where
         Self: Sized;
 
@@ -23,12 +23,12 @@ pub trait StateSampler: Downcast {
 impl_downcast!(StateSampler);
 
 pub struct CompoundStateSampler {
-    space: Arc<dyn StateSpace>,
+    space: Rc<dyn StateSpace>,
     pub samplers: Vec<(Box<dyn StateSampler>, f64)>,
 }
 
 impl CompoundStateSampler {
-    pub fn new(space: Arc<dyn StateSpace>) -> CompoundStateSampler {
+    pub fn new(space: Rc<dyn StateSpace>) -> CompoundStateSampler {
         CompoundStateSampler {
             samplers: Vec::new(),
             space,
@@ -41,7 +41,7 @@ impl CompoundStateSampler {
 }
 
 impl StateSampler for CompoundStateSampler {
-    fn from_state_space(space: Arc<dyn StateSpace>) -> Self {
+    fn from_state_space(space: Rc<dyn StateSpace>) -> Self {
         CompoundStateSampler::new(space)
     }
 
