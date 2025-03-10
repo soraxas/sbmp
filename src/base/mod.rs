@@ -1,3 +1,4 @@
+pub mod motion_validator;
 pub mod param;
 pub mod spaces;
 pub mod state;
