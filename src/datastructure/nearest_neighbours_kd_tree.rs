@@ -2,7 +2,7 @@
 /// but because the repo uses unstable features, this
 /// file is a copy of the original file with the unstable
 /// feature removed.
-use std::{collections::BinaryHeap, marker::PhantomData, rc::Rc, sync::Arc, vec};
+use std::{collections::BinaryHeap, marker::PhantomData, rc::Rc, vec};
 
 use crate::base::{state_allocator::StateId, statespace::StateSpace};
 
@@ -202,21 +202,19 @@ where
 
                 self.nodes[root].interior = Some(new_index);
             }
+        } else if let Some(ind) = self.nodes[root].exterior {
+            // recurse
+            self.insert_root(ind, value);
         } else {
-            if let Some(ind) = self.nodes[root].exterior {
-                // recurse
-                self.insert_root(ind, value);
-            } else {
-                // new leaf node
-                self.data.push(value);
-                let new_index = self.data.len() - 1;
+            // new leaf node
+            self.data.push(value);
+            let new_index = self.data.len() - 1;
 
-                self.nodes.push(Node::new_leaf(new_index, Some(root)));
+            self.nodes.push(Node::new_leaf(new_index, Some(root)));
 
-                self.nodes[new_index].radius = distance.clamp(root_radius / 2.0, root_radius);
+            self.nodes[new_index].radius = distance.clamp(root_radius / 2.0, root_radius);
 
-                self.nodes[root].exterior = Some(new_index);
-            }
+            self.nodes[root].exterior = Some(new_index);
         }
         // update the height
         self.set_height(root);
@@ -229,7 +227,7 @@ where
     pub fn insert(&mut self, value: Point) {
         if self.data.len() > 1 {
             self.insert_root(self.root, value)
-        } else if self.data.len() == 0 {
+        } else if self.data.is_empty() {
             self.data.push(value);
             self.nodes.push(Node::new_leaf(0, None))
         } else {
@@ -262,16 +260,14 @@ where
                 self.nodes[graft].radius = distance.clamp(root_radius / 2.0, root_radius);
                 self.nodes[graft].parent = Some(root);
             }
+        } else if let Some(ind) = self.nodes[root].exterior {
+            // recurse
+            self.insert_existing(ind, graft)
         } else {
-            if let Some(ind) = self.nodes[root].exterior {
-                // recurse
-                self.insert_existing(ind, graft)
-            } else {
-                // leaf node
-                self.nodes[root].exterior = Some(graft);
-                self.nodes[graft].radius = distance.clamp(root_radius / 2.0, root_radius);
-                self.nodes[graft].parent = Some(root);
-            }
+            // leaf node
+            self.nodes[root].exterior = Some(graft);
+            self.nodes[graft].radius = distance.clamp(root_radius / 2.0, root_radius);
+            self.nodes[graft].parent = Some(root);
         }
         // update the height
         self.set_height(root);
@@ -541,11 +537,11 @@ where
         }
     }
 
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Point> {
+    pub fn iter(&self) -> impl Iterator<Item = &'_ Point> {
         self.data.iter()
     }
 
-    pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut Point> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &'_ mut Point> {
         self.data.iter_mut()
     }
 
@@ -586,7 +582,7 @@ where
 
         let indices: Vec<usize> = (1..self.data.len()).collect();
 
-        if indices.len() > 0 {
+        if !indices.is_empty() {
             self.bulk_build_indices(0, indices);
         } else if self.data.len() == 1 {
             self.nodes[0] = Node::new_leaf(0, None);
@@ -692,7 +688,7 @@ where
 {
     fn new(query_point: &'a Point::PointType, tree: &'a VpAvl<Point, PointMetric>) -> Self {
         let mut prospects = BinaryHeap::new();
-        if tree.nodes.len() > 0 {
+        if !tree.nodes.is_empty() {
             prospects.push(NodeProspect {
                 index: tree.root,
                 min_distance: 0.0,
@@ -801,7 +797,7 @@ where
 {
     fn new(query_point: &'a Point::PointType, tree: &'a mut VpAvl<Point, PointMetric>) -> Self {
         let mut prospects = BinaryHeap::new();
-        if tree.nodes.len() > 0 {
+        if !tree.nodes.is_empty() {
             prospects.push(NodeProspect {
                 index: tree.root,
                 min_distance: 0.0,
@@ -912,7 +908,7 @@ where
 {
     fn new(query_point: &'a Point::PointType, tree: &'a VpAvl<Point, PointMetric>) -> Self {
         let mut prospects = BinaryHeap::new();
-        if tree.nodes.len() > 0 {
+        if !tree.nodes.is_empty() {
             prospects.push(NodeProspect {
                 index: tree.root,
                 min_distance: 0.0,
@@ -928,7 +924,7 @@ where
     }
 }
 
-impl<'a, Point, PointMetric> Iterator for KnnIndexIterator<'a, Point, PointMetric>
+impl<Point, PointMetric> Iterator for KnnIndexIterator<'_, Point, PointMetric>
 where
     Point: VpTreeObject,
     PointMetric: Metric<PointType = Point::PointType>,
@@ -1032,7 +1028,7 @@ where
 
     fn distance(&self, p1: &Self::PointType, p2: &Self::PointType) -> f64 {
         p1.into_iter()
-            .zip(p2.into_iter())
+            .zip(p2)
             .fold(0.0, |acc, (l, r)| acc + (l - r).powf(2.0))
             .sqrt()
     }
@@ -1058,8 +1054,8 @@ where
 
     fn distance(&self, p1: &Self::PointType, p2: &Self::PointType) -> f64 {
         p1.into_iter()
-            .zip(p2.into_iter())
-            .zip((&self.weights).into_iter())
+            .zip(p2)
+            .zip(&self.weights)
             .fold(0.0, |acc, ((l, r), w)| acc + w * (l - r).powf(2.0))
             .sqrt()
     }

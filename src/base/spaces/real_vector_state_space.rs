@@ -1,9 +1,8 @@
 use itertools::izip;
-use nalgebra::{DVector, SimdPartialOrd};
+use nalgebra::DVector;
 use sbmp_derive::{state_id_into_inner, WithStateAlloc, WithStateSpaceData};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use crate::base::state::State;
 use crate::base::state_allocator::{StateAllocator, StateId};
