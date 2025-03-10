@@ -1,6 +1,9 @@
-use std::{rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use super::{state_allocator::StateId, statespace::StateSpace};
+use crate::base::state_validity_checker::StateValidityChecker;
+
+pub mod discrete_motion_validator;
 
 #[derive(Clone, Debug, Default)]
 pub struct MotionCheckStats {
@@ -36,10 +39,11 @@ impl MotionCheckStats {
 }
 
 pub trait MotionValidator {
-    fn from_state_space(state_space: Rc<dyn StateSpace>) -> Self;
+    fn new(state_space: Rc<dyn StateSpace>, checker: Arc<dyn StateValidityChecker>) -> Self
+    where
+        Self: Sized;
 
-    fn get_motion_check_stats(&self) -> &MotionCheckStats;
-    fn get_motion_check_stats_mut(&mut self) -> &mut MotionCheckStats;
+    fn get_motion_check_stats(&self) -> &RefCell<MotionCheckStats>;
 
     /// Check if the path between two states (from s1 to s2) is valid. This function assumes s1
     /// is valid.
@@ -67,6 +71,6 @@ pub trait MotionValidator {
     ) -> bool;
 
     fn reset_motion_counter(&mut self) {
-        self.get_motion_check_stats_mut().reset();
+        self.get_motion_check_stats().borrow_mut().reset();
     }
 }

@@ -15,14 +15,10 @@ pub enum ClearanceComputationType {
 }
 
 pub trait StateValidityChecker {
-    fn from_state_space(space: Arc<dyn StateSpace>) -> Self
-    where
-        Self: Sized;
-
     fn is_valid(&self, state: &StateId) -> bool;
 
     /// Return the specifications (capabilities of this state validity checker)
-    fn specs() -> ClearanceComputationType {
+    fn specs(&self) -> ClearanceComputationType {
         ClearanceComputationType::default()
     }
 
@@ -69,14 +65,28 @@ pub trait StateValidityChecker {
     }
 }
 
+pub type StateValidityCheckerFn = Box<dyn Fn(&StateId) -> bool>;
+
+/// A state validity checker that uses a functional approach.
+struct FunctionalStateValidityChecker(StateValidityCheckerFn);
+
+impl StateValidityChecker for FunctionalStateValidityChecker {
+    fn is_valid(&self, state: &StateId) -> bool {
+        (self.0)(state)
+    }
+}
+
+// impl that turns function into checker
+impl From<StateValidityCheckerFn> for Box<dyn StateValidityChecker> {
+    fn from(checker: StateValidityCheckerFn) -> Box<dyn StateValidityChecker> {
+        Box::new(FunctionalStateValidityChecker(checker))
+    }
+}
+
 /// The simplest state validity checker: all states are valid.
 pub struct AllValidStateValidityChecker;
 
 impl StateValidityChecker for AllValidStateValidityChecker {
-    fn from_state_space(_space: Arc<dyn StateSpace>) -> Self {
-        Self {}
-    }
-
     fn is_valid(&self, _state: &StateId) -> bool {
         true
     }
