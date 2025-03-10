@@ -17,7 +17,6 @@
 //     removed: HashSet<T>,
 //     dist_fn: DistanceFunction<T>,
 
-
 //     near_queue: NearQueue<'a, T>,
 //     /// \brief Nodes yet to be processed for possible nearest neighbors
 //     node_queue: NearQueue<'a, T>,
@@ -66,7 +65,6 @@
 //         self.dist.partial_cmp(&other.dist).unwrap()
 //     }
 // }
-
 
 // // impl<T> PartialEq for Node<T> {
 // //     fn eq(&self, other: &Self) -> bool {
@@ -132,8 +130,6 @@
 //     //         self.children[min_ind].add(gnat, data);
 //     //     }
 //     // }
-
-
 
 //     fn need_to_split(&self, gnat: &GNAT<T>) -> bool {
 //         self.data.len() > gnat.max_num_pts_per_leaf && self.data.len() > self.degree
@@ -274,7 +270,6 @@
 //             data,
 //             tree.dist_to_pivot,
 //         );
-
 
 //         if self.size == 0 {
 //             return None;
